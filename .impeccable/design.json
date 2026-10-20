@@ -1,0 +1,276 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-20T16:12:08+08:00",
+  "title": "Design System: Easy Git",
+  "extensions": {
+    "colorMeta": {
+      "survey-paper": {
+        "role": "neutral",
+        "displayName": "Survey Paper",
+        "canonical": "#f5efe3",
+        "tonalRamp": ["#0f0b04", "#29241c", "#464138", "#666156", "#878277", "#aaa499", "#cec8bd", "#f4eee2"]
+      },
+      "paper-fold": {
+        "role": "neutral",
+        "displayName": "Paper Fold",
+        "canonical": "#ebe1ce",
+        "tonalRamp": ["#110a01", "#2b2415", "#494131", "#696050", "#8a8170", "#ada492", "#d2c8b5", "#f7edda"]
+      },
+      "fresh-sheet": {
+        "role": "neutral",
+        "displayName": "Fresh Sheet",
+        "canonical": "#fbf7ee",
+        "tonalRamp": ["#0d0b06", "#28251e", "#45423a", "#646159", "#86827a", "#a8a59c", "#cdc9c0", "#f2eee5"]
+      },
+      "button-ivory": {
+        "role": "neutral",
+        "displayName": "Button Ivory",
+        "canonical": "#fffcf4",
+        "tonalRamp": ["#0d0b06", "#27251f", "#44423b", "#64615a", "#85827b", "#a8a59d", "#ccc9c1", "#f1eee6"]
+      },
+      "atlas-ink": {
+        "role": "neutral",
+        "displayName": "Atlas Ink",
+        "canonical": "#20241f",
+        "tonalRamp": ["#090c08", "#222621", "#3f433e", "#5e635d", "#7f847e", "#a2a7a0", "#c6cbc4", "#ebf0e9"]
+      },
+      "soft-graphite": {
+        "role": "neutral",
+        "displayName": "Soft Graphite",
+        "canonical": "#45493f",
+        "tonalRamp": ["#090c05", "#23271e", "#40443a", "#5f6359", "#808479", "#a2a79c", "#c6cbbf", "#ecf1e4"]
+      },
+      "contour-gray": {
+        "role": "neutral",
+        "displayName": "Contour Gray",
+        "canonical": "#5e6157",
+        "tonalRamp": ["#0a0c05", "#24261e", "#41433a", "#606359", "#818479", "#a3a79c", "#c7cbbf", "#edf0e5"]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "rgba(32, 36, 31, 0.15)"
+      },
+      "survey-rule": {
+        "role": "neutral",
+        "displayName": "Survey Rule",
+        "canonical": "rgba(32, 36, 31, 0.28)"
+      },
+      "channel-teal": {
+        "role": "primary",
+        "displayName": "Channel Teal",
+        "canonical": "#1f6e6a",
+        "tonalRamp": ["#000f0e", "#002c2a", "#064c49", "#206f6b", "#47918c", "#6bb4af", "#8fd9d4", "#b4fffa"]
+      },
+      "deep-channel": {
+        "role": "primary",
+        "displayName": "Deep Channel",
+        "canonical": "#185753",
+        "tonalRamp": ["#000f0d", "#012c29", "#084c49", "#316d68", "#538f8a", "#76b2ad", "#9ad7d1", "#bffdf7"]
+      },
+      "attention-coral": {
+        "role": "secondary",
+        "displayName": "Attention Coral",
+        "canonical": "#c9563c",
+        "tonalRamp": ["#1d0200", "#480b00", "#7a1900", "#a6351c", "#cd5a3f", "#f57d62", "#feb4a3", "#ffe9e3"]
+      },
+      "signal-coral": {
+        "role": "secondary",
+        "displayName": "Signal Coral",
+        "canonical": "#a3412a",
+        "tonalRamp": ["#1c0200", "#480b00", "#781c04", "#9f3d27", "#c66048", "#ed836a", "#feb4a2", "#ffe9e3"]
+      },
+      "field-ochre": {
+        "role": "tertiary",
+        "displayName": "Field Ochre",
+        "canonical": "#b47a2c",
+        "tonalRamp": ["#140800", "#361f01", "#5d3902", "#86550a", "#ae7425", "#d3974d", "#fabc71", "#ffebd4"]
+      },
+      "deep-ochre": {
+        "role": "tertiary",
+        "displayName": "Deep Ochre",
+        "canonical": "#7a5415",
+        "tonalRamp": ["#130900", "#352000", "#5a3b04", "#7f591b", "#a27a40", "#c79d62", "#ecc186", "#ffebd1"]
+      },
+      "moss-success": {
+        "role": "tertiary",
+        "displayName": "Moss Success",
+        "canonical": "#587a4b",
+        "tonalRamp": ["#030f00", "#0e2d00", "#2c4c1f", "#4b6c3e", "#6b8e5e", "#8db180", "#b0d6a3", "#d5fcc7"]
+      },
+      "deep-moss": {
+        "role": "tertiary",
+        "displayName": "Deep Moss",
+        "canonical": "#2f6b4c",
+        "tonalRamp": ["#000f06", "#002e1a", "#0d4f31", "#336f50", "#569170", "#78b592", "#9cdab6", "#c3ffdb"]
+      },
+      "assistant-plum": {
+        "role": "tertiary",
+        "displayName": "Assistant Plum",
+        "canonical": "#765c88",
+        "tonalRamp": ["#150021", "#30193f", "#4f365f", "#6f5580", "#9176a3", "#b498c8", "#d9bced", "#f6e9ff"]
+      },
+      "deep-plum": {
+        "role": "tertiary",
+        "displayName": "Deep Plum",
+        "canonical": "#5c466d",
+        "tonalRamp": ["#140120", "#2f1a3e", "#4d375d", "#6d567f", "#8f77a1", "#b29ac6", "#d6beeb", "#f5e9ff"]
+      },
+      "river-slate": {
+        "role": "tertiary",
+        "displayName": "River Slate",
+        "canonical": "#5c7890",
+        "tonalRamp": ["#000c1a", "#0d273b", "#2b455b", "#49657c", "#6a869e", "#8ca9c3", "#afcde8", "#e1f1ff"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles such as 项目 and 提交历史; one per view." },
+      "headline": { "displayName": "Headline", "purpose": "Empty-state and AI greeting headings; compresses at short window heights." },
+      "title": { "displayName": "Title", "purpose": "Project names, sheet titles, and merge-request detail titles." },
+      "body": { "displayName": "Body", "purpose": "Working interface copy; long explanatory text runs 12.5px/1.75." },
+      "label": { "displayName": "Label", "purpose": "Section labels and table headers; uppercase only for Latin." },
+      "code": { "displayName": "Code", "purpose": "Hashes, paths, branch routes, model addresses, and code only." }
+    },
+    "shadows": [
+      { "name": "floating-menu", "value": "0 18px 38px -24px rgba(32, 36, 31, 0.55), 0 3px 10px rgba(32, 36, 31, 0.08)", "purpose": "Project overflow menu and small popovers." },
+      { "name": "sheet-edge", "value": "-22px 0 60px -34px rgba(32, 36, 31, 0.55)", "purpose": "The right-side sheet panel only." },
+      { "name": "local-lift", "value": "0 1px 2px rgba(32, 36, 31, 0.09)", "purpose": "A single-pixel lift for small raised controls." }
+    ],
+    "motion": [
+      { "name": "ease-view", "value": "cubic-bezier(0.2, 0.7, 0.2, 1)", "purpose": "View enter on route change; 0.22s in, 0.28s settle." },
+      { "name": "ease-sheet", "value": "cubic-bezier(0.22, 0.8, 0.24, 1)", "purpose": "Sheet slide-in at 0.3s and delta channel drawing at 0.95s." },
+      { "name": "hover", "value": "0.16s ease", "purpose": "Buttons, rows, fields, and chips at rest-to-hover." },
+      { "name": "select", "value": "0.12s ease", "purpose": "Commit row hover and selection." },
+      { "name": "delta-draw", "value": "0.95s", "purpose": "One-time delta channel draw with staggered delays when a project opens." },
+      { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce", "purpose": "Collapses animation to 0.01ms while preserving loading and caret visibility." }
+    ],
+    "breakpoints": [
+      { "name": "window-min", "value": "1000×640" },
+      { "name": "window-default", "value": "1280×820" },
+      { "name": "narrow", "value": "1180px" },
+      { "name": "compact", "value": "1080px" },
+      { "name": "single-column", "value": "980px" },
+      { "name": "short", "value": "max-height: 700px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single teal action in a region, e.g. 添加项目 or 新建合并请求.",
+      "html": "<button class='ds-btn-primary'><svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><path d='M12 5v14M5 12h14'/></svg>添加项目</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 14px;border:1px solid transparent;border-radius:10px;background:var(--teal);color:#fffcf4;font-family:var(--font-ui);font-size:12.5px;font-weight:600;line-height:1.25;letter-spacing:.005em;white-space:nowrap;cursor:pointer;transition:background-color .16s ease}.ds-btn-primary:hover{background:var(--teal-deep)}.ds-btn-primary:focus-visible{outline:2px solid var(--teal);outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "A bordered secondary action that sits on paper, e.g. 刷新.",
+      "html": "<button class='ds-btn-ghost'><svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 11a8 8 0 1 0-2.3 5.7'/><path d='M20 4v7h-7'/></svg>刷新</button>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 14px;border:1px solid var(--line-strong);border-radius:10px;background:rgba(251,247,238,.35);color:var(--ink-soft);font-family:var(--font-ui);font-size:12.5px;font-weight:600;line-height:1.25;white-space:nowrap;cursor:pointer;transition:background-color .16s ease,border-color .16s ease,color .16s ease}.ds-btn-ghost:hover{border-color:rgba(32,36,31,.42);background:var(--sheet);color:var(--ink)}.ds-btn-ghost:focus-visible{outline:2px solid var(--teal);outline-offset:2px}"
+    },
+    {
+      "name": "Quiet Destructive Button",
+      "kind": "button",
+      "refersTo": "button-danger-quiet",
+      "description": "Removal and close actions that should be visible but not shout.",
+      "html": "<button class='ds-btn-danger-quiet'>移除</button>",
+      "css": ".ds-btn-danger-quiet{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--coral-deep);font-family:var(--font-ui);font-size:12px;font-weight:600;line-height:1.4;cursor:pointer;transition:background-color .16s ease,color .16s ease}.ds-btn-danger-quiet:hover{background:rgba(201,86,60,.09);color:#8c3420}.ds-btn-danger-quiet:focus-visible{outline:2px solid var(--teal);outline-offset:2px}"
+    },
+    {
+      "name": "Search Pill",
+      "kind": "input",
+      "refersTo": "field-input",
+      "description": "The 320px index search: a pill field on paper with a teal focus halo.",
+      "html": "<label class='ds-search'><svg width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><path d='m20 20-3.5-3.5'/></svg><input placeholder='搜索名称或路径'/></label>",
+      "css": ".ds-search{display:flex;align-items:center;gap:8px;width:320px;max-width:100%;height:38px;padding:0 12px;border:1px solid var(--line-strong);border-radius:999px;background:rgba(251,247,238,.7);color:var(--muted);transition:border-color .16s ease,background-color .16s ease,box-shadow .16s ease}.ds-search:focus-within{border-color:rgba(31,110,106,.55);background:var(--sheet);box-shadow:0 0 0 3px rgba(31,110,106,.11)}.ds-search input{width:100%;min-width:0;height:100%;padding:0;border:0;outline:none;background:none;color:var(--ink);font-family:var(--font-ui);font-size:12.5px}.ds-search input::placeholder{color:var(--muted)}"
+    },
+    {
+      "name": "App Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "The centered pill navigation inside the 64px ink app bar.",
+      "html": "<div class='ds-navwrap'><nav class='ds-nav'><button class='ds-nav-item active'><svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='6' cy='5' r='2'/><circle cx='6' cy='19' r='2'/><circle cx='18' cy='7' r='2'/><path d='M6 7v10'/><path d='M18 9v1a4 4 0 0 1-4 4H9'/></svg>提交图谱</button><button class='ds-nav-item'><svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='6' cy='5' r='2'/><circle cx='6' cy='19' r='2'/><circle cx='18' cy='19' r='2'/><path d='M6 7v10'/><path d='M18 17V9a4 4 0 0 0-4-4h-2'/><path d='m14 3-2 2 2 2'/></svg>合并请求</button><button class='ds-nav-item'><svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8'/></svg>AI 助手</button></nav></div>",
+      "css": ".ds-navwrap{display:flex;justify-content:center;padding:14px 18px;background:var(--ink)}.ds-nav{display:flex;align-items:center;gap:2px;padding:3px;border:1px solid rgba(245,239,227,.1);border-radius:999px;background:rgba(245,239,227,.06)}.ds-nav-item{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border:0;border-radius:999px;background:transparent;color:rgba(245,239,227,.66);font-family:var(--font-ui);font-size:12px;font-weight:550;line-height:1.3;white-space:nowrap;cursor:pointer;transition:background-color .16s ease,color .16s ease}.ds-nav-item:hover{background:rgba(245,239,227,.08);color:#f5efe3}.ds-nav-item.active{background:var(--paper);color:var(--ink)}.ds-nav-item.active svg{color:var(--teal)}.ds-nav-item:focus-visible{outline:2px solid var(--paper);outline-offset:2px}"
+    },
+    {
+      "name": "Tag Chip",
+      "kind": "chip",
+      "refersTo": "chip-tag",
+      "description": "Small labels for refs, topics, and states; the active variant carries teal meaning.",
+      "html": "<div class='ds-chips'><span class='ds-chip'>bug</span><span class='ds-chip ds-chip-active'>master</span></div>",
+      "css": ".ds-chips{display:flex;flex-wrap:wrap;gap:6px;font-family:var(--font-ui)}.ds-chip{padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:rgba(251,247,238,.65);color:var(--ink-soft);font-size:11px;line-height:1.5}.ds-chip-active{border-color:rgba(31,110,106,.24);background:rgba(31,110,106,.08);color:var(--teal-deep)}"
+    },
+    {
+      "name": "Field Input",
+      "kind": "input",
+      "refersTo": "field-input",
+      "description": "The standard stacked label + value field used in sheets and settings.",
+      "html": "<label class='ds-field'><span>服务地址</span><input value='http://127.0.0.1:11434/v1'/></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:6px;min-width:0;font-family:var(--font-ui)}.ds-field span{color:var(--ink-soft);font-size:11px;font-weight:600;letter-spacing:.03em}.ds-field input{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--line-strong);border-radius:9px;outline:none;background:rgba(251,247,238,.72);color:var(--ink);font-family:var(--font-ui);font-size:12.5px;line-height:1.5;transition:border-color .16s ease,background-color .16s ease,box-shadow .16s ease}.ds-field input:hover{border-color:rgba(32,36,31,.38)}.ds-field input:focus{border-color:rgba(31,110,106,.55);background:var(--sheet);box-shadow:0 0 0 3px rgba(31,110,106,.11)}"
+    },
+    {
+      "name": "AI Quick Action",
+      "kind": "card",
+      "refersTo": "quick-card",
+      "description": "The 2×2 empty-state actions in the AI view; a contained card with a teal icon tile.",
+      "html": "<button class='ds-quick'><span class='ds-quick-icon'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8'/></svg></span><span class='ds-quick-copy'><strong>解释当前改动</strong><small>用大白话说明工作区里的变化</small></span><svg class='ds-quick-arrow' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M7 17 17 7M9 7h8v8'/></svg></button>",
+      "css": ".ds-quick{display:flex;align-items:center;gap:11px;width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(251,247,238,.7);color:var(--ink);font-family:var(--font-ui);text-align:left;cursor:pointer;transition:background-color .16s ease,border-color .16s ease}.ds-quick:hover{border-color:rgba(31,110,106,.34);background:var(--sheet)}.ds-quick:focus-visible{outline:2px solid var(--teal);outline-offset:2px}.ds-quick-icon{display:grid;place-items:center;width:32px;height:32px;flex:none;border-radius:9px;background:rgba(31,110,106,.08);color:var(--teal-deep)}.ds-quick-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.ds-quick-copy strong{font-size:12px;font-weight:600;line-height:1.4}.ds-quick-copy small{color:var(--muted);font-size:11px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-quick-arrow{flex:none;margin-left:auto;color:var(--muted);transition:color .16s ease,transform .16s ease}.ds-quick:hover .ds-quick-arrow{color:var(--teal);transform:translate(2px,-2px)}"
+    },
+    {
+      "name": "Project Row",
+      "kind": "custom",
+      "description": "The atlas index row: generated delta plate, display name, mono path, branch meta, circular open control.",
+      "html": "<button class='ds-project'><span class='ds-project-art'><svg viewBox='0 0 120 60' fill='none' stroke-linecap='round'><g stroke='rgba(32,36,31,.22)' stroke-width='.8' stroke-dasharray='2 5'><path d='M4 12C24 6 44 8 60 14S96 22 116 14'/><path d='M6 52C28 46 44 48 62 50S98 48 116 44'/></g><path d='M4 24c18-2 30 10 48 8s36-12 64-5' stroke='var(--teal)' stroke-width='1.6'/><path d='M4 36c20-2 28-12 46-12s36 12 66 16' stroke='var(--coral)' stroke-width='1.3'/><path d='M10 48c18-4 30-6 46-8s38-6 60-7' stroke='var(--ochre)' stroke-width='1.2'/><path d='M4 18c16 4 26 12 40 20s36 8 56 4' stroke='var(--moss)' stroke-width='1.2'/><path d='M18 6c16 6 28 10 44 12s36 24 54 30' stroke='var(--plum)' stroke-width='1.1'/><path d='M52 32c14 4 22 12 30 22' stroke='var(--slate)' stroke-width='1.1'/></svg></span><span class='ds-project-info'><span class='ds-project-name'>front-end-docs</span><span class='ds-project-path'>E:/workspace/git/front-end-docs</span><span class='ds-project-meta'><svg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='6' cy='5' r='2'/><circle cx='6' cy='19' r='2'/><circle cx='18' cy='7' r='2'/><path d='M6 7v10'/><path d='M18 9v1a4 4 0 0 1-4 4H9'/></svg>master</span></span><span class='ds-project-open'><svg width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M7 17 17 7M9 7h8v8'/></svg></span></button>",
+      "css": ".ds-project{display:grid;grid-template-columns:84px minmax(0,1fr) 36px;align-items:center;gap:20px;width:100%;min-height:88px;padding:15px 62px 15px 4px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink);font-family:var(--font-ui);text-align:left;cursor:pointer;transition:background-color .16s ease}.ds-project:hover{background:rgba(251,247,238,.55)}.ds-project:focus-visible{outline:2px solid var(--teal);outline-offset:-3px}.ds-project-art{display:grid;place-items:center;width:84px;height:52px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:rgba(251,247,238,.55);transition:border-color .18s ease,background-color .18s ease}.ds-project:hover .ds-project-art{border-color:rgba(31,110,106,.32);background:var(--sheet)}.ds-project-art svg{width:100%;height:100%}.ds-project-info{display:flex;flex-direction:column;min-width:0}.ds-project-name{font-family:var(--font-display);font-size:19px;font-weight:600;line-height:1.3;letter-spacing:-.015em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-project-path{margin-top:3px;color:var(--muted);font-family:var(--font-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-project-meta{display:flex;align-items:center;gap:6px;margin-top:6px;color:var(--ink-soft);font-size:11px}.ds-project-meta svg{color:var(--teal)}.ds-project-open{display:grid;place-items:center;width:34px;height:34px;border:1px solid var(--line-strong);border-radius:50%;color:var(--ink-soft);transition:background-color .18s ease,border-color .18s ease,color .18s ease,transform .18s ease}.ds-project:hover .ds-project-open{border-color:var(--teal);background:var(--teal);color:#fffcf4;transform:translate(1px,-1px)}"
+    },
+    {
+      "name": "Commit Row",
+      "kind": "custom",
+      "description": "A 42px river-line history row; selection is a teal wash with a filled graph node.",
+      "html": "<div class='ds-commit-list'><button class='ds-commit selected'><span class='ds-commit-graph'><svg width='42' height='42' viewBox='0 0 42 42'><path d='M12 0v42' stroke='var(--teal)' stroke-opacity='.45' stroke-width='1.6'/><circle cx='12' cy='21' r='4' fill='var(--paper)' stroke='var(--teal)' stroke-width='1.6'/><circle cx='12' cy='21' r='1.8' fill='var(--teal)'/></svg></span><span class='ds-commit-summary'>完善帮助文档</span><span class='ds-commit-ref'>HEAD</span><span class='ds-commit-date'>2024/05/28</span></button><button class='ds-commit'><span class='ds-commit-graph'><svg width='42' height='42' viewBox='0 0 42 42'><path d='M12 0v42' stroke='var(--teal)' stroke-opacity='.45' stroke-width='1.6'/><circle cx='12' cy='21' r='3.2' fill='var(--teal)'/></svg></span><span class='ds-commit-summary'>增加制作白膜帮助文档</span><span class='ds-commit-ref'>master</span><span class='ds-commit-date'>2024/08/16</span></button></div>",
+      "css": ".ds-commit-list{width:100%;border-top:1px solid var(--line);background:var(--paper);font-family:var(--font-ui)}.ds-commit{display:flex;align-items:center;width:100%;height:42px;padding:0 14px 0 0;border:0;border-bottom:1px solid rgba(32,36,31,.07);background:transparent;color:var(--ink);font-family:var(--font-ui);font-size:12.5px;text-align:left;cursor:pointer;transition:background-color .12s ease}.ds-commit:hover{background:rgba(31,110,106,.045)}.ds-commit.selected{background:rgba(31,110,106,.085)}.ds-commit:focus-visible{outline:2px solid var(--teal);outline-offset:-3px}.ds-commit-graph{display:grid;place-items:center;width:52px;height:42px;flex:none}.ds-commit-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-commit-ref{flex:none;margin-left:8px;padding:1px 6px;border:1px solid var(--line);border-radius:999px;color:var(--ink-soft);font-family:var(--font-mono);font-size:11px;line-height:1.5}.ds-commit-date{width:88px;flex:none;text-align:right;color:var(--muted);font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The River Atlas",
+    "overview": "A repository is a watershed and its history is a river network; branches split and merge like tributaries. Easy Git is the atlas you work in: warm survey paper, an ink sky at the top, hairline survey rules, and generated delta line art that draws itself when a repository opens. The project index reads like an atlas index; a project opens into a working map of its own history. Nothing here is meant to feel like a dashboard, a control panel, or a backoffice.\n\nDensity is treated as legibility rather than authority. Most surfaces sit unframed on paper and are separated by 1px rules; contained cards exist only for self-contained groups such as a merge-request report or a settings block. The one ink field is the 64px app bar; everything below it stays paper, sheet, or paper-deep. Actions speak in teal, attention and destruction in coral, warnings and tags in ochre, success in moss, and AI in plum — each color carries a meaning, none is decoration.\n\nThe type pairing does the quiet work: Bricolage Grotesque gives Latin display, project names, and numerals a measured, cartographic character; Public Sans and Microsoft YaHei keep the Chinese interface plain and fast to read; mono is confined to hashes, paths, routes, and code. Motion is short and purposeful — a view settles in 0.22s, a sheet slides in 0.3s, the delta plate draws in under a second — and all of it yields to `prefers-reduced-motion`.",
+    "keyCharacteristics": [
+      "Warm survey paper field under a single ink app bar.",
+      "Structure from hairline rules and paper tones, not panels or resting shadows.",
+      "One teal action voice; semantic accents stay rare and meaningful.",
+      "Generated delta line art as the identity, echoed by the commit graph.",
+      "Tabular numerals and an 11px functional type floor.",
+      "One 1180px column for index surfaces; work area plus a fixed inspector rail inside a project.",
+      "Chinese-first copy with a Chinese-aware font stack, never Latin tracking on CJK."
+    ],
+    "rules": [
+      { "name": "The Ink Sky Rule", "body": "Atlas Ink fills the 64px app bar and nothing else of scale. Every other large surface stays paper, sheet, or paper-deep; if a screen feels unanchored, add a rule or a heading, not a dark panel.", "section": "colors" },
+      { "name": "The One Signal Rule", "body": "Teal is for the one primary action in a region. Coral, ochre, moss, and plum are semantic and may be absent from a screen entirely. None of them is decorative.", "section": "colors" },
+      { "name": "The 11px Floor Rule", "body": "No functional label, table header, badge, or metadata drops below 11px; prose stays at 12px or larger. Reduce content before shrinking type.", "section": "typography" },
+      { "name": "The Chinese Pair Rule", "body": "Bricolage Grotesque carries Latin display, project names, and numerals only. Chinese always falls through to Microsoft YaHei or PingFang in the same stack and never receives Latin uppercase tracking.", "section": "typography" },
+      { "name": "The One Column Rule", "body": "Index and settings surfaces use a single 1180px column. Project workspaces split into work area plus one fixed inspector or list rail. No persistent sidebar and no widget grid.", "section": "layout" },
+      { "name": "The Floating-Only Rule", "body": "Shadows belong to overlays. Resting cards, rows, and panels are separated by hairlines and paper tones; if content needs emphasis, change its type or add a rule, not a shadow.", "section": "elevation" },
+      { "name": "The Quiet Corner Rule", "body": "Use 6–10px for controls and plates, 12–14px for surfaces, and 999px for pills and circles. Never exceed 14px except for a pill.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do keep Survey Paper as the page field and reserve Atlas Ink for the 64px app bar.",
+      "Do build hierarchy with 1px hairlines and the paper → sheet → paper-fold tonal stack.",
+      "Do keep functional type at 11px or larger and prose at 12px or larger; use tabular numerals for hashes, dates, counts, and diffs.",
+      "Do give each region one teal primary action and leave destructive actions in coral.",
+      "Do set Chinese in the UI stack (Public Sans → YaHei/PingFang) and reserve Bricolage for Latin display and numerals.",
+      "Do animate the delta draw and sheet transitions at 0.16–0.3s and honor prefers-reduced-motion.",
+      "Do let lists scroll inside their own region while the app bar and rails stay fixed."
+    ],
+    "donts": [
+      "Don't introduce a sidebar, gray admin panels, a KPI card grid, or dashboard chrome anywhere in the app.",
+      "Don't use coral, ochre, moss, plum, or slate as decoration; they are meaning-bound.",
+      "Don't put shadows on resting content or round any working surface beyond 14px.",
+      "Don't set Chinese in Bricolage or mono, or apply uppercase Latin tracking to CJK.",
+      "Don't shrink functional labels below 11px or body copy below 12px to win density; cut content instead.",
+      "Don't use pure white page backgrounds; Fresh Sheet and Button Ivory are the lightest acceptable surfaces.",
+      "Don't add a second dark surface or a second accent voice to a screen that already has one."
+    ]
+  }
+}
