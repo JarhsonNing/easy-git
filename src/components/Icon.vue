@@ -10,6 +10,8 @@ withDefaults(
 
 const paths: Record<string, string[]> = {
   plus: ["M12 5v14", "M5 12h14"],
+  minus: ["M5 12h14"],
+  stash: ["M3 5h18v4H3z", "M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9", "M10 13h4"],
   search: ["M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z", "m20 20-4-4"],
   refresh: [
     "M20 11a8 8 0 1 0-2.34 5.66",

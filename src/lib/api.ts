@@ -6,8 +6,11 @@ import type {
   AppConfig,
   ChatMessage,
   CommitDetail,
+  CommitOutcome,
   CommitPage,
   CommitPatch,
+  DiscardMode,
+  FileDiff,
   GitLabBranch,
   GitLabProjectRef,
   GitLabUser,
@@ -23,7 +26,10 @@ import type {
   RepoStatus,
   RepoSummary,
   ResetMode,
+  StashEntry,
   WorkingDiff,
+  WorkingFiles,
+  WorkingStage,
 } from "../types";
 
 export function getSettings(): Promise<AppConfig> {
@@ -189,6 +195,70 @@ export function continueOperation(kind: OperationKind): Promise<OperationResult>
 
 export function abortOperation(kind: OperationKind): Promise<OperationResult> {
   return invoke<OperationResult>("abort_operation", { kind });
+}
+
+export function getWorkingFiles(): Promise<WorkingFiles> {
+  return invoke<WorkingFiles>("get_working_files");
+}
+
+export function getFileDiff(path: string, stage: WorkingStage): Promise<FileDiff> {
+  return invoke<FileDiff>("get_file_diff", { path, stage });
+}
+
+export function applyHunk(
+  path: string,
+  stage: WorkingStage,
+  hunkIndex: number,
+): Promise<OperationResult> {
+  return invoke<OperationResult>("apply_hunk", { path, stage, hunkIndex });
+}
+
+export function stageFiles(paths: string[]): Promise<OperationResult> {
+  return invoke<OperationResult>("stage_files", { paths });
+}
+
+export function unstageFiles(paths: string[]): Promise<OperationResult> {
+  return invoke<OperationResult>("unstage_files", { paths });
+}
+
+export function stageAll(): Promise<OperationResult> {
+  return invoke<OperationResult>("stage_all");
+}
+
+export function unstageAll(): Promise<OperationResult> {
+  return invoke<OperationResult>("unstage_all");
+}
+
+export function discardFiles(paths: string[], mode: DiscardMode): Promise<OperationResult> {
+  return invoke<OperationResult>("discard_files", { paths, mode });
+}
+
+export function commitIdentity(): Promise<string | null> {
+  return invoke<string | null>("commit_identity");
+}
+
+export function commitChanges(
+  summary: string,
+  description: string,
+  amend: boolean,
+): Promise<CommitOutcome> {
+  return invoke<CommitOutcome>("commit_changes", { summary, description, amend });
+}
+
+export function listStashes(): Promise<StashEntry[]> {
+  return invoke<StashEntry[]>("list_stashes");
+}
+
+export function stashPush(message: string, includeUntracked: boolean): Promise<OperationResult> {
+  return invoke<OperationResult>("stash_push", { message, includeUntracked });
+}
+
+export function stashApply(reference: string, drop: boolean): Promise<OperationResult> {
+  return invoke<OperationResult>("stash_apply", { reference, drop });
+}
+
+export function stashDrop(reference: string): Promise<OperationResult> {
+  return invoke<OperationResult>("stash_drop", { reference });
 }
 
 export function chatStream(

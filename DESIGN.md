@@ -147,7 +147,7 @@ The type pairing does the quiet work: Bricolage Grotesque gives Latin display, p
 - One teal action voice; semantic accents stay rare and meaningful.
 - Generated delta line art as the identity, echoed by the commit graph.
 - Tabular numerals and an 11px functional type floor.
-- One 1180px column for index surfaces; work area plus a fixed inspector rail inside a project.
+- One 1180px column for index surfaces; work area plus a fixed inspector rail inside a project, with one switch choosing whether that project reads as history or as working changes.
 - Chinese-first copy with a Chinese-aware font stack, never Latin tracking on CJK.
 
 ## Colors
@@ -214,16 +214,16 @@ The app is a single vertical shell: a 64px ink app bar over a scrolling main reg
 
 Index surfaces — project list and settings — use one column of `min(1180px, 100%)` with 42px / 36px / 56px padding, a 42px page title, a short lede capped at 54ch, and a page rule beneath. Project rows are full-width, 88px minimum, with an 84×52 delta plate, a flexible name/path column, and a circular open control. The search line is a 320px pill on the left with a tabular repository count on the right.
 
-Project workspaces skip the page heading and go straight to work. The commit view is a three-column atlas: a 236px branch rail (domain content — the repository's own branch tree, not app navigation), the 1fr commit sheet, and a 348px inspector, 16px apart; table headers are 34px, commit rows 42px, and the inspector holds either the branch dossier or the commit dossier. The merge-request view is a 320–380px list plus a flexible report pane; the list narrows to 350px at 1180px and 320px at 1080px. AI is a centered workspace up to 1120px with an 820px conversation column. Settings is a 200px sticky index plus a form column on paper.
+Project workspaces skip the page heading and go straight to work. The commit view is a three-column atlas: a 236px domain rail, the 1fr work sheet, and a 348px inspector, 16px apart; table headers are 34px, commit rows 42px. One segmented switch in the toolbar (图谱 / 变更, with a tabular change count) drives all three columns at once: in 图谱 the rail lists branches, the sheet lists commits, and the inspector holds the branch or commit dossier; in 变更 the rail lists working files, the sheet becomes the file's hunk-level diff, and the inspector becomes the commit composer. The same switch is the only place the mode is set — no second toggle lives in the rail or the inspector. The merge-request view is a 320–380px list plus a flexible report pane; the list narrows to 350px at 1180px and 320px at 1080px. AI is a centered workspace up to 1120px with an 820px conversation column. Settings is a 200px sticky index plus a form column on paper.
 
-Below 1180px the branch rail becomes a drawer: it slides over the graph-layout from the left at 264px with a veil over the work area, opened by a “分支” ghost button in the toolbar and closed by its own circular control or the veil. It never covers the app bar.
+Below 1180px the domain rail becomes a drawer: it slides over the work area from the left at 264px with a veil, opened by a ghost button in the toolbar whose label matches the current mode (“分支” or “变更”) and closed by its own circular control or the veil. It never covers the app bar.
 
 Breakpoints are 1180px, 1080px, and 980px; a max-height pass at 700px compresses the AI empty state. The supported window runs from 1000×640 to 1280×820 and wider; at the minimum size, author and date columns may drop before the work area is allowed to feel cramped.
 
 The rhythm is 4/6/8/12/16/24/36/56. Panel insets are 22–24px, row gaps 10–15px, and section separation 24–36px. Density is welcome; crowding is not.
 
 ### Named Rules
-**The One Column Rule.** Index and settings surfaces use a single 1180px column. Project workspaces split into work area plus at most two fixed rails (a domain branch rail and one inspector). No app-navigation sidebar and no widget grid; the branch rail carries repository content only.
+**The One Column Rule.** Index and settings surfaces use a single 1180px column. Project workspaces split into work area plus at most two fixed rails (a domain rail and one inspector). No app-navigation sidebar and no widget grid; the domain rail carries repository content only — refs in 图谱, working files in 变更 — never pages or app modes.
 
 ## Elevation & Depth
 
@@ -276,7 +276,7 @@ Circles mark openings, returns, avatars, menu triggers, and status dots. Pills c
 ### Navigation
 - **App bar:** 64px Atlas Ink, fixed; brand at 18px display weight, project name at 13px/550 with a mono branch pill beneath, centered pill nav with 12px/550 items, active item on Survey Paper with a teal icon, settings as a circular icon button.
 - **In-view:** tabs are underlined text or pill filters, never a second bar. The settings index is a vertical list with counts that becomes horizontal pills below 980px.
-- **No sidebars for navigation.** The project context always shows where you are and offers one circular return control. The one exception is the commit view's branch rail: it is a map legend for the repository's branches and tags, not a navigation surface — it lists refs, never pages or app modes.
+- **No sidebars for navigation.** The project context always shows where you are and offers one circular return control. The one exception is the commit view's domain rail: it is a map legend for the repository, not a navigation surface — it lists refs in 图谱 and working files in 变更, never pages or app modes. The 图谱 / 变更 switch that repurposes it sits in the toolbar, exactly once.
 
 ### Delta Plate (signature)
 A generated river delta drawn from the repository path in six channel colors (teal, coral, ochre, moss, plum, slate) over dotted survey contours. It animates once when a project opens: contours fade in, channels draw in 0.95s with staggered delays, joints and endpoints settle, and a slow current pulses along one channel. The same branching language becomes the commit graph, so the identity is functional, not ornamental.
@@ -289,6 +289,13 @@ A 42px row with a river-line graph gutter, 12.5px summary, ref chips, and tabula
 
 ### Branch Rail (signature)
 A 236px paper column of the repository's own refs: filter pill, three hairline sections (本地 / 远程 / 标签) with mono counts, 7px hollow lane dots that fill teal for the checked-out branch, mono 11.5px ref names, a teal “当前” badge, and ↑/↓ tabular sync marks. The overflow trigger (24px, more icon) appears only on row hover. The footer is a 11px hint line above a hairline. Drag a branch onto a branch or commit to start merge / rebase / reset / cherry-pick; right-click opens the canvas menu.
+
+### Working Changes & Commit Composer (signature)
+The 变更 half of the same three-column atlas, in the same paper-and-hairline language. The rail groups changes as 冲突 / 已暂存 / 未暂存 / 未跟踪 / 贮藏 with hairline headers and tabular counts; each row is a status glyph in its signal color (teal for staged, ochre for unstaged, moss for untracked, coral for conflicted), a mono path split into a muted directory and an ink filename, and +n −n counts that match `git diff --numstat` exactly. Row actions are one-icon controls at the right edge: ⊕/⊖ stages or unstage the whole file, the trash icon opens a discard confirmation. Group headers carry the bulk action (暂存全部 / 取消暂存全部); 贮藏 collapses to a count line and each entry shows a plum `stash@{n}` badge.
+
+The center sheet shows one file's diff split into hunks. Each hunk has a hairline head carrying its `@@` range, the function context, its own +n −n, and a stage dot — ⊕ to stage that hunk, ⊖ to unstage it. Files that cannot be split (untracked, renamed, deleted, conflicted) render the dot disabled with the reason in its tooltip, and the pane head offers the whole-file action instead. Conflict files get a card that explains the state and offers 标记为已解决 rather than a diff.
+
+The inspector's third dossier is the composer: 摘要 (72-character cap) and 详细描述 on the shared input system, an amend checkbox, a hairline line reading 已暂存 N 个文件 with tabular +n −n, and the split commit control — one teal voice for 提交 with a chevron cell joined at the same radius offering 暂存全部并提交 and 提交并推送. Both halves disable together while the summary is empty. The 提交者 line shows `git var GIT_AUTHOR_IDENT` without its epoch, and an ochre warning replaces it when the repository has no identity. 写提交信息 sits in the dossier head and streams through the same AI path as the assistant; credentials never leave the keychain. `Ctrl+Enter` commits from anywhere in the view.
 
 ### Canvas Menu & Action Dialog
 Destructive or parameterized git operations run through two overlay primitives: a floating menu (Floating Menu shadow, 12px corners, 14px icons, coral for danger rows) and a centered action dialog on an ink veil at 34% (14–16px corners, parameter fields reuse the input system, radio choice cards highlight with a teal border, danger confirmations use Signal Coral). The operation result returns as a banner between toolbar and graph: moss for success, coral for errors, and an ochre conflict state that lists conflicting paths as mono chips and offers 继续 / 中止 inline.

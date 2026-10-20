@@ -7,6 +7,12 @@ use std::path::PathBuf;
 pub use schema::AppConfig;
 
 fn config_path() -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("EASYGIT_CONFIG_DIR") {
+        let dir = PathBuf::from(dir);
+        fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
+        return Ok(dir.join("config.json"));
+    }
     let dir = dirs::config_dir()
         .ok_or_else(|| "无法定位系统配置目录".to_string())?
         .join("easy-git");

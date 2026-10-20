@@ -26,11 +26,12 @@ One focused desktop workspace that combines a visual commit graph, self-hosted G
 - Repository data is read locally. GitLab access uses a configured instance (cloud or self-hosted) and API token; AI uses OpenAI-compatible endpoints, including local Ollama/LM Studio/llama.cpp/vLLM services.
 - Settings are application-level and remain available whether or not a project is open.
 - Credentials are stored only in the OS keychain (service `com.easygit.app`, accounts `gitlab:{id}` / `ai:{id}`). Non-secret configuration lives at `%APPDATA%\easy-git\config.json`.
-- Primary surfaces: project list, commit graph with commit detail, merge request list/detail/diff/comments, AI conversation, settings.
+- Primary surfaces: project list, commit graph with commit detail and a commit workspace (working changes, hunk staging, stash, commit composer), merge request list/detail/diff/comments, AI conversation, settings.
 
 ## Capabilities and Constraints
 
 - Visual commit graph with branch topology, refs, paging, and per-commit file/stat detail.
+- Commit workspace on the same three columns: per-file and per-hunk staging, whole-file and bulk stage/unstage, discard with confirmation, stash push/apply/pop/drop, commit with amend, commit-and-push, and AI-drafted commit messages.
 - GitLab merge request integration: instance selection, filters, search, detail, file diffs, comments, create, merge (with squash/remove-source options), close, reopen, and open in GitLab.
 - AI assistant with streaming output, repository/worktree/selected-commit context, quick actions, and stop control.
 - Self-hosted GitLab must be supported.

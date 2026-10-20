@@ -5,6 +5,9 @@ import DeltaMark from "../components/DeltaMark.vue";
 import BranchRail from "../components/BranchRail.vue";
 import CanvasMenu from "../components/CanvasMenu.vue";
 import ActionDialog from "../components/ActionDialog.vue";
+import CommitComposer from "../components/CommitComposer.vue";
+import WorkingDiff from "../components/WorkingDiff.vue";
+import WorkspaceRail from "../components/WorkspaceRail.vue";
 import {
   abortOperation as abortGitOperation,
   cherryPick as cherryPickCommit,
@@ -49,6 +52,30 @@ import {
   status,
 } from "../stores/repo";
 import { navigate } from "../stores/ui";
+import {
+  applyHunkByIndex,
+  applyStash,
+  changeCount,
+  diffLoading,
+  discardFile,
+  enterChanges,
+  files as workingFiles,
+  filesTruncated,
+  fileDiff,
+  panelMode,
+  refreshWorkspace,
+  removeStash,
+  resetWorkspace,
+  selectFile,
+  selected as selectedFileKey,
+  stageEverything,
+  stashEverything,
+  stashes,
+  toggleFile,
+  unstageEverything,
+  workspaceLoading,
+  type PanelMode,
+} from "../stores/workspace";
 import type {
   ActionDialogConfig,
   BranchInfo,
@@ -59,7 +86,9 @@ import type {
   OperationKind,
   RefLabel,
   ResetMode,
+  StashEntry,
   TagInfo,
+  WorkingFile,
 } from "../types";
 
 const ROW_HEIGHT = 42;
@@ -1400,6 +1429,138 @@ async function abortCurrent(kind: OperationKind) {
 function stateKindLabel(kind: OperationKind): string {
   return { merge: "合并", rebase: "变基", "cherry-pick": "拣选", revert: "还原" }[kind];
 }
+
+const panelTabs: { key: PanelMode; label: string }[] = [
+  { key: "graph", label: "图谱" },
+  { key: "changes", label: "变更" },
+];
+
+const selectedFile = computed<WorkingFile | null>(() => {
+  const key = selectedFileKey.value;
+  if (!key) return null;
+  return (
+    workingFiles.value.find(
+      (file) => file.path === key.path && file.stage === key.stage,
+    ) ?? null
+  );
+});
+
+const workspaceChanges = computed(() => changeCount.value);
+
+async function setPanel(mode: PanelMode) {
+  if (mode === panelMode.value) return;
+  if (mode === "changes") {
+    await enterChanges();
+    return;
+  }
+  panelMode.value = "graph";
+}
+
+watch(
+  () => session.value?.path ?? "",
+  (next, previous) => {
+    if (next !== previous) resetWorkspace();
+  },
+);
+
+function onWorkingToggle(file: WorkingFile) {
+  void toggleFile(file);
+}
+
+function openDiscard(file: WorkingFile) {
+  const untracked = file.stage === "untracked";
+  showDialog(
+    {
+      title: untracked ? "删除未跟踪文件" : "丢弃更改",
+      description: untracked
+        ? `将从磁盘删除 ${file.path}。这个文件还没有被 Git 记录，删掉后无法从仓库找回。`
+        : `将 ${file.path} 的改动还原到 ${file.stage === "staged" ? "HEAD（同时取消暂存）" : "暂存区"}。未保存的改动会直接消失。`,
+      confirmLabel: untracked ? "删除文件" : "丢弃更改",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          danger: true,
+          text: "这个操作不可撤销，且不会写入任何可以恢复的地方。确认后再继续。",
+        },
+      ],
+    },
+    async () => {
+      await discardFile(file);
+    },
+  );
+}
+
+function openStash() {
+  showDialog(
+    {
+      title: "贮藏变更",
+      description: "把当前工作区的改动暂时收起来，让工作区回到干净状态。",
+      confirmLabel: "贮藏",
+      fields: [
+        {
+          kind: "text",
+          key: "message",
+          label: "说明",
+          placeholder: "例如：切换分支前的临时保存",
+          help: "留空则使用默认说明。",
+        },
+        {
+          kind: "checkbox",
+          key: "includeUntracked",
+          label: "一起贮藏未跟踪文件",
+          help: "未跟踪文件不会被 HEAD 记录，选上才会一起收起来。",
+        },
+      ],
+    },
+    async (values) => {
+      await stashEverything(textValue(values, "message").trim(), boolValue(values, "includeUntracked"));
+    },
+  );
+}
+
+function openStashDrop(entry: StashEntry) {
+  showDialog(
+    {
+      title: "删除贮藏",
+      description: `将删除 ${entry.reference}：${entry.message}`,
+      confirmLabel: "删除贮藏",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          danger: true,
+          text: "删除后这条贮藏很难再找回，请确认它已经不再需要。",
+        },
+      ],
+    },
+    async () => {
+      await removeStash(entry);
+    },
+  );
+}
+
+function onStashApply(entry: StashEntry) {
+  void applyStash(entry, false);
+}
+
+function onStashPop(entry: StashEntry) {
+  void applyStash(entry, true);
+}
+
+function onHunkApply(index: number) {
+  void applyHunkByIndex(index);
+}
+
+function onWorkingDiscard() {
+  if (selectedFile.value) openDiscard(selectedFile.value);
+}
+
+function onWorkingToggleSelected() {
+  if (selectedFile.value) void toggleFile(selectedFile.value);
+}
 </script>
 
 <template>
@@ -1430,6 +1591,20 @@ function stateKindLabel(kind: OperationKind): string {
           </p>
         </div>
         <div class="workspace-actions">
+          <div class="segmented panel-switch" role="tablist" aria-label="工作区视图">
+            <button
+              v-for="tab in panelTabs"
+              :key="tab.key"
+              type="button"
+              class="segment"
+              role="tab"
+              :aria-selected="panelMode === tab.key"
+              :class="{ active: panelMode === tab.key }"
+              @click="setPanel(tab.key)"
+            >
+              {{ tab.label }}<span v-if="tab.key === 'changes' && workspaceChanges"> {{ workspaceChanges }}</span>
+            </button>
+          </div>
           <span v-if="operation" class="op-pill" aria-live="polite">
             <span class="loading-orbit" aria-hidden="true"></span>
             {{ operation }}
@@ -1478,8 +1653,8 @@ function stateKindLabel(kind: OperationKind): string {
             </button>
           </div>
           <button type="button" class="button ghost small rail-toggle" @click="railOpen = true">
-            <Icon name="branch" :size="15" />
-            分支
+            <Icon :name="panelMode === 'changes' ? 'file' : 'branch'" :size="15" />
+            {{ panelMode === "changes" ? "变更" : "分支" }}
           </button>
           <button
             type="button"
@@ -1545,7 +1720,29 @@ function stateKindLabel(kind: OperationKind): string {
 
       <div class="graph-layout">
         <div v-if="railOpen" class="rail-scrim" @click="railOpen = false"></div>
+        <WorkspaceRail
+          v-show="panelMode === 'changes'"
+          :files="workingFiles"
+          :stashes="stashes"
+          :selected="selectedFileKey"
+          :truncated="filesTruncated"
+          :loading="workspaceLoading"
+          :disabled="!!operation"
+          :class="{ 'rail-open': railOpen && panelMode === 'changes' }"
+          @select="selectFile"
+          @toggle="onWorkingToggle"
+          @discard="openDiscard"
+          @stage-all="stageEverything"
+          @unstage-all="unstageEverything"
+          @stash-new="openStash"
+          @stash-apply="onStashApply"
+          @stash-pop="onStashPop"
+          @stash-drop="openStashDrop"
+          @refresh="refreshWorkspace"
+          @close="railOpen = false"
+        />
         <BranchRail
+          v-show="panelMode === 'graph'"
           :refs="refs"
           :selected="
             selectedBranch
@@ -1553,7 +1750,7 @@ function stateKindLabel(kind: OperationKind): string {
               : null
           "
           :disabled="!!operation"
-          :class="{ 'rail-open': railOpen }"
+          :class="{ 'rail-open': railOpen && panelMode === 'graph' }"
           @select-branch="focusBranch"
           @select-tag="focusTag"
           @menu="openRailMenu"
@@ -1565,7 +1762,7 @@ function stateKindLabel(kind: OperationKind): string {
           @close="railOpen = false"
         />
 
-        <section class="surface commit-sheet" aria-label="提交图谱">
+        <section v-show="panelMode === 'graph'" class="surface commit-sheet" aria-label="提交图谱">
           <div class="commit-head">
             <span class="col-graph" :style="{ width: `${graphWidth + 8}px` }">图谱</span>
             <span class="col-summary">提交</span>
@@ -1677,7 +1874,31 @@ function stateKindLabel(kind: OperationKind): string {
           </div>
         </section>
 
-        <aside class="surface inspector" aria-label="详情">
+        <WorkingDiff
+          v-show="panelMode === 'changes'"
+          :diff="fileDiff"
+          :file="selectedFile"
+          :loading="diffLoading"
+          :disabled="!!operation"
+          @apply-hunk="onHunkApply"
+          @toggle-file="onWorkingToggleSelected"
+          @discard="onWorkingDiscard"
+        />
+
+        <aside
+          v-if="panelMode === 'changes'"
+          class="surface inspector composer-pane"
+          aria-label="提交"
+        >
+          <CommitComposer
+            :branch="headLabel"
+            :can-push="(refs?.remotes.length ?? 0) > 0"
+            :disabled="!!operation || !!dialog"
+            @push="openPushCurrent"
+          />
+        </aside>
+
+        <aside v-else class="surface inspector" aria-label="详情">
           <div class="inspector-head">
             <span class="section-label">{{ selectedBranch ? "分支详情" : "提交详情" }}</span>
             <button

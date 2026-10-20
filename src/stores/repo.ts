@@ -250,6 +250,7 @@ export function clearNotice() {
 export async function runOperation(
   label: string,
   action: () => Promise<OperationResult>,
+  after: () => Promise<void> = refreshRepo,
 ): Promise<boolean> {
   if (operation.value) return false;
   operation.value = label;
@@ -272,11 +273,11 @@ export async function runOperation(
             detail: result.output,
           },
     );
-    await refreshRepo();
+    await after();
     return true;
   } catch (e) {
     setNotice({ tone: "error", message: errorText(e) });
-    await refreshRepo();
+    await after();
     return false;
   } finally {
     operation.value = null;

@@ -353,3 +353,66 @@ export interface ChatMessage {
 export type AiEvent =
   | { type: "delta"; text: string }
   | { type: "done"; cancelled: boolean };
+
+export type WorkingStage = "staged" | "unstaged" | "untracked" | "conflicted";
+export type WorkingStatus =
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "typechange"
+  | "modified"
+  | "conflicted";
+export type DiffLineKind = "add" | "del" | "meta" | "context";
+export type DiscardMode = "head" | "unstage" | "clean";
+
+export interface WorkingFile {
+  path: string;
+  oldPath: string | null;
+  status: WorkingStatus;
+  stage: WorkingStage;
+  additions: number;
+  deletions: number;
+  hunkable: boolean;
+}
+
+export interface WorkingFiles {
+  files: WorkingFile[];
+  truncated: boolean;
+}
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  text: string;
+}
+
+export interface Hunk {
+  index: number;
+  header: string;
+  additions: number;
+  deletions: number;
+  lines: DiffLine[];
+}
+
+export interface FileDiff {
+  path: string;
+  stage: WorkingStage;
+  hunkable: boolean;
+  binary: boolean;
+  truncated: boolean;
+  additions: number;
+  deletions: number;
+  hunks: Hunk[];
+}
+
+export interface StashEntry {
+  reference: string;
+  message: string;
+  date: string;
+}
+
+export interface CommitOutcome {
+  message: string;
+  output: string;
+  oid: string | null;
+  amended: boolean;
+}

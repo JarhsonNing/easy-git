@@ -1,6 +1,6 @@
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
 use tauri::State;
 
@@ -8,11 +8,11 @@ use super::repo::{
     lock_ops, read_refs, read_status, workdir, OperationResult, RepoStatus, RepoStore,
 };
 
-const OUTPUT_LIMIT: usize = 6_000;
+pub(crate) const OUTPUT_LIMIT: usize = 6_000;
 
-struct GitOutput {
-    ok: bool,
-    text: String,
+pub(crate) struct GitOutput {
+    pub(crate) ok: bool,
+    pub(crate) text: String,
 }
 
 fn redact_url_credentials(text: &str) -> String {
@@ -66,24 +66,16 @@ fn clip_output(raw: &str) -> String {
     }
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> Result<GitOutput, String> {
-    let output = Command::new("git")
-        .current_dir(dir)
-        .args(["-c", "color.ui=false", "-c", "core.quotepath=false"])
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("GIT_MERGE_AUTOEDIT", "no")
-        .env("GIT_PAGER", "cat")
-        .env("GCM_INTERACTIVE", "Never")
-        .output()
-        .map_err(|error| match error.kind() {
-            ErrorKind::NotFound => {
-                "未找到 Git 命令，请先安装 Git 并确保它在系统 PATH 中。".to_string()
-            }
-            _ => format!("启动 Git 失败: {error}"),
-        })?;
+fn not_found_hint(error: &std::io::Error) -> String {
+    match error.kind() {
+        ErrorKind::NotFound => {
+            "未找到 Git 命令，请先安装 Git 并确保它在系统 PATH 中。".to_string()
+        }
+        _ => format!("启动 Git 失败: {error}"),
+    }
+}
 
+fn collect(output: Output) -> GitOutput {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut combined = String::new();
@@ -97,13 +89,75 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<GitOutput, String> {
         combined.push_str(stderr.trim_end());
     }
 
-    Ok(GitOutput {
+    GitOutput {
         ok: output.status.success(),
         text: clip_output(&combined),
+    }
+}
+
+fn base_command(dir: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(dir)
+        .args(["-c", "color.ui=false", "-c", "core.quotepath=false"])
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", "true")
+        .env("GIT_MERGE_AUTOEDIT", "no")
+        .env("GIT_PAGER", "cat")
+        .env("GCM_INTERACTIVE", "Never");
+    command
+}
+
+pub(crate) fn run_git(dir: &Path, args: &[&str]) -> Result<GitOutput, String> {
+    let output = base_command(dir, args)
+        .output()
+        .map_err(|error| not_found_hint(&error))?;
+    Ok(collect(output))
+}
+
+pub(crate) struct RawOutput {
+    pub(crate) ok: bool,
+    /// Stdout verbatim: patch text keeps its final newline or Git calls it corrupt.
+    pub(crate) stdout: String,
+    pub(crate) error: String,
+}
+
+pub(crate) fn run_git_raw(dir: &Path, args: &[&str]) -> Result<RawOutput, String> {
+    let output = base_command(dir, args)
+        .output()
+        .map_err(|error| not_found_hint(&error))?;
+    Ok(RawOutput {
+        ok: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        error: clip_output(&String::from_utf8_lossy(&output.stderr)),
     })
 }
 
-fn reject_dash(value: &str, label: &str) -> Result<(), String> {
+/// Runs Git with `input` fed to stdin, so patch text never has to touch the command line
+/// or the filesystem.
+pub(crate) fn run_git_stdin(dir: &Path, args: &[&str], input: &[u8]) -> Result<GitOutput, String> {
+    let mut child = base_command(dir, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| not_found_hint(&error))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(input)
+            .map_err(|error| format!("写入 Git 输入失败: {error}"))?;
+        stdin.flush().ok();
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("等待 Git 完成失败: {error}"))?;
+    Ok(collect(output))
+}
+
+pub(crate) fn reject_dash(value: &str, label: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err(format!("{label}不能为空"));
     }
@@ -184,7 +238,7 @@ fn ensure_remote(store: &RepoStore, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_no_operation(store: &RepoStore) -> Result<RepoStatus, String> {
+pub(crate) fn ensure_no_operation(store: &RepoStore) -> Result<RepoStatus, String> {
     let status = read_status(store)?;
     if status.state != "clean" {
         return Err(format!(
@@ -207,7 +261,7 @@ fn state_label(state: &str) -> &'static str {
     }
 }
 
-fn finish(
+pub(crate) fn finish(
     store: &RepoStore,
     outcome: GitOutput,
     success: impl Into<String>,
