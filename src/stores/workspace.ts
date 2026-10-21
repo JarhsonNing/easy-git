@@ -8,6 +8,7 @@ import {
   discardFiles,
   errorText,
   getFileDiff,
+  getCommit,
   getRepoStatus,
   getWorkingDiff,
   getWorkingFiles,
@@ -30,17 +31,14 @@ import {
 } from "./repo";
 import type {
   ChatMessage,
-  DiscardMode,
   FileDiff,
   OperationResult,
   StashEntry,
   WorkingFile,
   WorkingStage,
+  WorkingTarget,
 } from "../types";
 
-export type PanelMode = "graph" | "changes";
-
-export const panelMode = ref<PanelMode>("graph");
 export const files = ref<WorkingFile[]>([]);
 export const filesTruncated = ref(false);
 export const stashes = ref<StashEntry[]>([]);
@@ -86,13 +84,15 @@ export const stagedSummary = computed(() => {
   return { additions, deletions };
 });
 
-function discardModeFor(file: WorkingFile): DiscardMode {
-  if (file.stage === "untracked") return "clean";
-  if (file.stage === "staged") return "unstage";
-  return "head";
+export function targetsOf(selection: WorkingFile[]): WorkingTarget[] {
+  return selection.map((file) => ({
+    path: file.path,
+    oldPath: file.oldPath,
+    status: file.status,
+    stage: file.stage,
+  }));
 }
 
-export { discardModeFor };
 async function loadDiff(path: string | null, stage: WorkingStage | null): Promise<void> {
   const request = ++diffRequest;
   if (!path || !stage || stage === "conflicted") {
@@ -164,13 +164,11 @@ async function loadIdentity(): Promise<void> {
   }
 }
 
-export async function enterChanges(): Promise<void> {
-  panelMode.value = "changes";
+export async function enterWorkspace(): Promise<void> {
   await Promise.all([refreshWorkspace(), loadIdentity()]);
 }
 
 export function resetWorkspace() {
-  panelMode.value = "graph";
   files.value = [];
   filesTruncated.value = false;
   stashes.value = [];
@@ -192,6 +190,20 @@ export async function selectFile(file: WorkingFile): Promise<void> {
   await loadDiff(file.path, file.stage);
 }
 
+export async function reuseCommitMessage(oid: string): Promise<boolean> {
+  try {
+    const detail = await getCommit(oid);
+    const lines = detail.message.replace(/\r\n/g, "\n").split("\n");
+    const title = (lines.shift() ?? "").trim() || detail.summary;
+    summary.value = title.slice(0, 72);
+    description.value = lines.join("\n").trim();
+    return true;
+  } catch (e) {
+    setNotice({ tone: "error", message: errorText(e) });
+    return false;
+  }
+}
+
 function runWorkspace(
   label: string,
   action: () => Promise<OperationResult>,
@@ -202,15 +214,36 @@ function runWorkspace(
 export function stageFile(file: WorkingFile): Promise<boolean> {
   const label =
     file.stage === "conflicted" ? "正在标记为已解决…" : `正在暂存 ${file.path}…`;
-  return runWorkspace(label, () => stageFiles([file.path]));
+  return runWorkspace(label, () => stageFiles(targetsOf([file])));
 }
 
 export function unstageFile(file: WorkingFile): Promise<boolean> {
-  return runWorkspace(`正在取消暂存 ${file.path}…`, () => unstageFiles([file.path]));
+  return runWorkspace(`正在取消暂存 ${file.path}…`, () => unstageFiles(targetsOf([file])));
 }
 
 export function toggleFile(file: WorkingFile): Promise<boolean> {
   return file.stage === "staged" ? unstageFile(file) : stageFile(file);
+}
+
+export function stageMany(selection: WorkingFile[]): Promise<boolean> {
+  if (!selection.length) return Promise.resolve(false);
+  return runWorkspace(`正在暂存 ${selection.length} 个文件…`, () =>
+    stageFiles(targetsOf(selection)),
+  );
+}
+
+export function unstageMany(selection: WorkingFile[]): Promise<boolean> {
+  if (!selection.length) return Promise.resolve(false);
+  return runWorkspace(`正在取消暂存 ${selection.length} 个文件…`, () =>
+    unstageFiles(targetsOf(selection)),
+  );
+}
+
+export function discardMany(selection: WorkingFile[]): Promise<boolean> {
+  if (!selection.length) return Promise.resolve(false);
+  return runWorkspace(`正在丢弃 ${selection.length} 个文件的更改…`, () =>
+    discardFiles(targetsOf(selection)),
+  );
 }
 
 export function stageEverything(): Promise<boolean> {
@@ -231,9 +264,7 @@ export function applyHunkByIndex(hunkIndex: number): Promise<boolean> {
 }
 
 export function discardFile(file: WorkingFile): Promise<boolean> {
-  return runWorkspace(`正在丢弃 ${file.path} 的更改…`, () =>
-    discardFiles([file.path], discardModeFor(file)),
-  );
+  return runWorkspace(`正在丢弃 ${file.path} 的更改…`, () => discardFiles(targetsOf([file])));
 }
 
 export function stashEverything(message: string, includeUntracked: boolean): Promise<boolean> {

@@ -187,6 +187,96 @@ export interface GitLabBranch {
 
 export type MergeRequestFilter = "opened" | "merged" | "closed" | "all";
 
+export interface GitLabProject {
+  id: number;
+  name: string;
+  nameWithNamespace: string;
+  path: string;
+  description: string;
+  webUrl: string;
+  defaultBranch: string;
+  visibility: string;
+  lastActivityAt: string;
+  archived: boolean;
+  forkedFromPath: string | null;
+  forkedFromWebUrl: string | null;
+}
+
+export interface LocalProjectMatch {
+  projectPath: string;
+  localPath: string;
+  name: string;
+}
+
+export interface GitLabProjectPage {
+  items: GitLabProject[];
+  page: number;
+  hasMore: boolean;
+}
+
+export interface GitLabTreeEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+}
+
+export interface GitLabTreePage {
+  entries: GitLabTreeEntry[];
+  hasMore: boolean;
+}
+
+export interface GitLabFileContent {
+  path: string;
+  content: string;
+  binary: boolean;
+  truncated: boolean;
+  size: number;
+}
+
+export interface GitLabPipeline {
+  id: number;
+  iid: number;
+  status: string;
+  source: string;
+  refName: string;
+  sha: string;
+  webUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  duration: number | null;
+}
+
+export interface GitLabPipelinePage {
+  items: GitLabPipeline[];
+  page: number;
+  hasMore: boolean;
+}
+
+export interface GitLabJob {
+  id: number;
+  name: string;
+  stage: string;
+  status: string;
+  webUrl: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  duration: number | null;
+  runner: string;
+  failureReason: string | null;
+}
+
+export interface GitLabJobTrace {
+  trace: string;
+  truncated: boolean;
+  size: number;
+}
+
+export interface CloneResult {
+  path: string;
+  name: string;
+}
+
 export interface WorkingDiff {
   patch: string;
   filesChanged: number;
@@ -230,6 +320,13 @@ export interface RepoRefs {
   remotes: string[];
 }
 
+export interface RemoteInfo {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+  hasCredentials: boolean;
+}
+
 export interface RepoStatus {
   branch: string;
   headOid: string | null;
@@ -266,6 +363,7 @@ export interface Notice {
 export interface MenuItem {
   id?: string;
   label?: string;
+  hint?: string;
   icon?: string;
   danger?: boolean;
   disabled?: boolean;
@@ -363,7 +461,6 @@ export type WorkingStatus =
   | "modified"
   | "conflicted";
 export type DiffLineKind = "add" | "del" | "meta" | "context";
-export type DiscardMode = "head" | "unstage" | "clean";
 
 export interface WorkingFile {
   path: string;
@@ -373,6 +470,13 @@ export interface WorkingFile {
   additions: number;
   deletions: number;
   hunkable: boolean;
+}
+
+export interface WorkingTarget {
+  path: string;
+  oldPath: string | null;
+  status: WorkingStatus;
+  stage: WorkingStage;
 }
 
 export interface WorkingFiles {
@@ -402,6 +506,25 @@ export interface FileDiff {
   additions: number;
   deletions: number;
   hunks: Hunk[];
+}
+
+export interface CommitFileDiff {
+  path: string;
+  oldPath: string | null;
+  status: WorkingStatus;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  truncated: boolean;
+  hunks: Hunk[];
+}
+
+export interface CommitDiff {
+  oid: string;
+  files: CommitFileDiff[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
 }
 
 export interface StashEntry {

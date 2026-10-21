@@ -2,6 +2,7 @@
 import { computed, type Component } from "vue";
 import GraphView from "./views/GraphView.vue";
 import MrView from "./views/MrView.vue";
+import GitLabView from "./views/GitLabView.vue";
 import AiView from "./views/AiView.vue";
 import SettingsView from "./views/SettingsView.vue";
 import ProjectsView from "./views/ProjectsView.vue";
@@ -18,6 +19,7 @@ interface ProjectNavEntry {
 const projectViews: ProjectNavEntry[] = [
   { key: "graph", label: "提交图谱", icon: "branch" },
   { key: "mr", label: "合并请求", icon: "git-merge" },
+  { key: "gitlab", label: "代码库", icon: "cloud" },
   { key: "ai", label: "AI 助手", icon: "sparkles" },
 ];
 
@@ -25,6 +27,7 @@ const viewComponents: Record<ViewKey, Component> = {
   projects: ProjectsView,
   graph: GraphView,
   mr: MrView,
+  gitlab: GitLabView,
   ai: AiView,
   settings: SettingsView,
 };
@@ -64,10 +67,10 @@ const locationLabel = computed(() => {
             type="button"
             class="appbar-back"
             title="返回项目列表"
-            aria-label="返回项目列表"
             @click="navigate('projects')"
           >
-            <Icon name="arrow-left" :size="17" />
+            <Icon name="arrow-left" :size="15" />
+            返回
           </button>
           <div class="project-context">
             <strong>{{ locationLabel }}</strong>
@@ -109,10 +112,10 @@ const locationLabel = computed(() => {
           class="appbar-icon"
           :class="{ active: activeView === 'settings' }"
           title="应用设置"
-          aria-label="应用设置"
           @click="navigate('settings')"
         >
-          <Icon name="settings" :size="18" />
+          <Icon name="settings" :size="16" />
+          设置
         </button>
       </div>
     </header>

@@ -5,7 +5,10 @@ use tauri::State;
 use url::Url;
 
 use crate::commands::repo::{self, RepoStore};
-use crate::config::{self, schema::GitLabInstance};
+use crate::config::{
+    self,
+    schema::{GitLabInstance, ProjectEntry},
+};
 
 const PER_PAGE: u32 = 30;
 
@@ -18,7 +21,36 @@ fn truncate(value: &str, limit: usize) -> String {
     }
 }
 
-fn encode_component(value: &str) -> String {
+/// GitLab 会用 `null` 表示“没有值”的字符串字段（项目描述、空仓库的默认分支、
+/// 新增文件的 old_path、二进制文件的 diff、没有头像的用户……），
+/// 而这些字段在界面里都当成空字符串处理。`#[serde(default)]` 只兜住“键不存在”，
+/// 兜不住显式的 `null`，所以统一走这个反序列化。
+pub(crate) mod null_str {
+    use serde::{Deserializer, Deserialize};
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+    }
+}
+
+/// 同上，用于 GitLab 可能整体返回 `null` 的对象字段（例如已注销用户的 author）。
+pub(crate) mod null_struct {
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Deserializer};
+
+    pub(crate) fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+    where
+        T: DeserializeOwned + Default,
+        D: Deserializer<'de>,
+    {
+        Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+    }
+}
+
+pub(crate) fn encode_component(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {
@@ -155,13 +187,13 @@ fn find_instance(instance_id: &str) -> Result<GitLabInstance, String> {
         .ok_or_else(|| "找不到该 GitLab 实例，请先在设置中重新保存".to_string())
 }
 
-struct ApiContext {
-    client: reqwest::Client,
-    base: String,
-    token: String,
+pub(crate) struct ApiContext {
+    pub(crate) client: reqwest::Client,
+    pub(crate) base: String,
+    pub(crate) token: String,
 }
 
-fn prepare(instance_id: &str) -> Result<ApiContext, String> {
+pub(crate) fn prepare(instance_id: &str) -> Result<ApiContext, String> {
     let instance = find_instance(instance_id)?;
     let base = api_base(&instance.base_url)?;
     let token = crate::config::secrets::read_secret(&format!("gitlab:{}", instance.id))?
@@ -179,7 +211,7 @@ fn prepare(instance_id: &str) -> Result<ApiContext, String> {
     })
 }
 
-async fn api_error(response: reqwest::Response) -> String {
+pub(crate) async fn api_error(response: reqwest::Response) -> String {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     let detail = truncate(&body, 240);
@@ -191,14 +223,23 @@ async fn api_error(response: reqwest::Response) -> String {
     }
 }
 
-async fn parse_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
+pub(crate) async fn parse_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, String> {
     if !response.status().is_success() {
         return Err(api_error(response).await);
     }
-    response
-        .json::<T>()
+    let body = response
+        .text()
         .await
-        .map_err(|e| format!("解析 GitLab 响应失败: {e}"))
+        .map_err(|e| format!("读取 GitLab 响应失败: {e}"))?;
+    serde_json::from_str::<T>(&body).map_err(|e| decode_error(&body, &e))
+}
+
+fn decode_error(body: &str, error: &serde_json::Error) -> String {
+    let head = truncate(body, 160);
+    if !head.starts_with('{') && !head.starts_with('[') {
+        return format!("GitLab 返回的不是 JSON，可能被登录页或代理拦截：{head}");
+    }
+    format!("解析 GitLab 响应失败：{error}")
 }
 
 #[derive(Debug, Serialize)]
@@ -253,13 +294,71 @@ pub fn resolve_gitlab_project(
     })
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProjectMatch {
+    pub project_path: String,
+    pub local_path: String,
+    pub name: String,
+}
+
+fn instance_host(base_url: &str) -> Option<String> {
+    let parsed = Url::parse(base_url.trim()).ok()?;
+    let host = parsed.host_str()?.to_lowercase();
+    Some(match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
+}
+
+/// 首页用它判断线上项目是否已经在本机：把已添加项目的 origin 解析成该实例下的项目路径。
+/// 仓库被移动、删除或没有远端时跳过，不影响其余项目。
+fn collect_local_matches(entries: &[ProjectEntry], base_url: &str) -> Vec<LocalProjectMatch> {
+    let host = match instance_host(base_url) {
+        Some(host) => host,
+        None => return Vec::new(),
+    };
+    let mut matched = Vec::new();
+    for entry in entries {
+        let Ok(repo) = git2::Repository::open(&entry.path) else {
+            continue;
+        };
+        let Some(remote) = origin_url(&repo).as_deref().and_then(parse_remote_url) else {
+            continue;
+        };
+        if remote.host != host {
+            continue;
+        }
+        let Ok(project_path) = project_path_from_remote(&remote, base_url) else {
+            continue;
+        };
+        matched.push(LocalProjectMatch {
+            project_path,
+            local_path: entry.path.clone(),
+            name: entry.name.clone(),
+        });
+    }
+    matched
+}
+
+#[tauri::command]
+pub async fn list_local_project_matches(
+    instance_id: String,
+) -> Result<Vec<LocalProjectMatch>, String> {
+    let instance = find_instance(&instance_id)?;
+    let entries = config::get_settings()?.projects;
+    tauri::async_runtime::spawn_blocking(move || collect_local_matches(&entries, &instance.base_url))
+        .await
+        .map_err(|e| format!("读取本地仓库失败: {e}"))
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct RawUser {
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     name: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     username: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     avatar_url: String,
 }
 
@@ -269,25 +368,25 @@ struct RawMergeRequest {
     id: u64,
     #[serde(default)]
     iid: u64,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     title: String,
     #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     state: String,
     #[serde(default)]
     draft: bool,
     #[serde(default)]
     work_in_progress: bool,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     source_branch: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     target_branch: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     web_url: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     created_at: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     updated_at: String,
     #[serde(default)]
     merged_at: Option<String>,
@@ -295,7 +394,7 @@ struct RawMergeRequest {
     user_notes_count: u64,
     #[serde(default)]
     labels: Vec<String>,
-    #[serde(default)]
+    #[serde(default, with = "null_struct")]
     author: RawUser,
     #[serde(default)]
     has_conflicts: bool,
@@ -468,11 +567,11 @@ pub async fn get_merge_request(
 
 #[derive(Debug, Deserialize, Default)]
 struct RawChange {
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     old_path: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     new_path: String,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     diff: String,
     #[serde(default)]
     new_file: bool,
@@ -554,11 +653,11 @@ pub async fn list_merge_request_changes(
 struct RawNote {
     #[serde(default)]
     id: u64,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     body: String,
-    #[serde(default)]
+    #[serde(default, with = "null_struct")]
     author: RawUser,
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     created_at: String,
     #[serde(default)]
     system: bool,
@@ -622,7 +721,7 @@ pub async fn list_merge_request_notes(
 
 #[derive(Debug, Deserialize, Default)]
 struct RawBranch {
-    #[serde(default)]
+    #[serde(default, with = "null_str")]
     name: String,
     #[serde(default, rename = "default")]
     is_default: bool,
@@ -641,25 +740,20 @@ pub struct GitLabBranch {
     pub protected: bool,
 }
 
-#[tauri::command]
-pub async fn list_gitlab_branches(
-    instance_id: String,
-    project_path: String,
+async fn fetch_branches(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    project_path: &str,
 ) -> Result<Vec<GitLabBranch>, String> {
-    let context = prepare(&instance_id)?;
-    let response = context
-        .client
+    // 该端点只接受 search/regex 等参数，传 order_by/sort 会被 GitLab 以 HTTP 400 拒绝
+    let response = client
         .get(format!(
-            "{}/projects/{}/repository/branches",
-            context.base,
-            encode_component(&project_path)
+            "{base}/projects/{}/repository/branches",
+            encode_component(project_path)
         ))
-        .header("PRIVATE-TOKEN", context.token)
-        .query(&[
-            ("per_page", "100"),
-            ("order_by", "updated"),
-            ("sort", "desc"),
-        ])
+        .header("PRIVATE-TOKEN", token)
+        .query(&[("per_page", "100")])
         .send()
         .await
         .map_err(|e| format!("连接 GitLab 失败: {e}"))?;
@@ -673,6 +767,15 @@ pub async fn list_gitlab_branches(
             protected: branch.protected,
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn list_gitlab_branches(
+    instance_id: String,
+    project_path: String,
+) -> Result<Vec<GitLabBranch>, String> {
+    let context = prepare(&instance_id)?;
+    fetch_branches(&context.client, &context.base, &context.token, &project_path).await
 }
 
 #[derive(Debug, Serialize)]
@@ -875,6 +978,92 @@ mod tests {
         assert_eq!(mr.description, "");
     }
 
+    #[test]
+    fn tolerates_null_strings_and_objects() {
+        // GitLab 用 null 表示“没有值”：没头像的用户、被注销的 MR 作者、新增文件的 old_path、二进制文件的 diff。
+        let mr: RawMergeRequest = serde_json::from_str(
+            r#"{
+                "iid": 8, "title": "Graph", "state": "opened",
+                "source_branch": "a", "target_branch": "main",
+                "web_url": "https://gl/team/repo/-/merge_requests/8",
+                "author": {"name": "Lin", "username": "lin", "avatar_url": null},
+                "merged_at": null, "labels": []
+            }"#,
+        )
+        .expect("avatar_url 为 null 时应能解析");
+        assert_eq!(MergeRequest::from(mr).author_avatar_url, "");
+
+        let note: RawNote = serde_json::from_str(
+            r#"{"id": 3, "body": "ok", "author": null, "created_at": "2026-10-21T10:00:00Z"}"#,
+        )
+        .expect("author 为 null 时应能解析");
+        assert_eq!(note.author.username, "");
+
+        let change: RawChange = serde_json::from_str(
+            r#"{"old_path": null, "new_path": "assets/logo.png", "diff": null, "new_file": true}"#,
+        )
+        .expect("新增文件与二进制 diff 应能解析");
+        assert_eq!(change.old_path, "");
+        assert_eq!(change.diff, "");
+    }
+
+    #[test]
+    fn matches_local_repos_to_gitlab_projects() {
+        let root = std::env::temp_dir().join(format!("easy-git-local-match-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create temp dir");
+
+        let entry = |name: &str, url: &str| {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).expect("create repo dir");
+            let repo = git2::Repository::init(&dir).expect("init repo");
+            if !url.is_empty() {
+                repo.remote("origin", url).expect("add origin");
+            }
+            ProjectEntry {
+                path: dir.to_string_lossy().to_string(),
+                name: name.to_string(),
+            }
+        };
+
+        let entries = vec![
+            entry("same-host", "http://gitlab.test:8888/team/demo.git"),
+            entry("under-subpath", "http://gitlab.test:8888/gitlab/team/second.git"),
+            entry("other-host", "https://gitlab.com/team/demo.git"),
+            entry("no-remote", ""),
+            ProjectEntry {
+                path: root.join("moved-away").to_string_lossy().to_string(),
+                name: "moved-away".to_string(),
+            },
+        ];
+
+        let matched = collect_local_matches(&entries, "http://gitlab.test:8888");
+        let names = matched
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["same-host", "under-subpath"], "只应命中同一主机的仓库");
+        let paths = matched
+            .iter()
+            .map(|m| m.project_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["team/demo", "gitlab/team/second"]);
+
+        let subpath = collect_local_matches(&entries, "http://gitlab.test:8888/gitlab");
+        let names = subpath
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["same-host", "under-subpath"], "同主机即命中：SSH 风格的远端不带子路径前缀");
+        let paths = subpath
+            .iter()
+            .map(|m| m.project_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["team/demo", "team/second"], "带子路径的实例应剥掉前缀");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn fetches_merge_request_page_over_http() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -921,5 +1110,47 @@ mod tests {
         assert!(request.contains("state=opened"));
         assert!(request.contains("search=graph"));
         assert!(lower.contains("private-token: secret-token"));
+    }
+
+    #[tokio::test]
+    async fn fetches_branches_without_unsupported_sort_params() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let read = stream.read(&mut buffer).unwrap();
+            sender
+                .send(String::from_utf8_lossy(&buffer[..read]).to_string())
+                .unwrap();
+            let body = r#"[{"name":"main","default":true,"merged":false,"protected":true},{"name":"feature","default":false,"merged":false,"protected":false}]"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let branches = fetch_branches(
+            &client,
+            &format!("http://{address}"),
+            "secret-token",
+            "team/repo",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].name, "main");
+        assert!(branches[0].is_default);
+
+        let request = receiver.recv().unwrap();
+        assert!(request.contains("GET /projects/team%2Frepo/repository/branches?per_page=100"));
+        assert!(!request.contains("sort="));
+        assert!(!request.contains("order_by="));
     }
 }

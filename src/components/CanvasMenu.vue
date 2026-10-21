@@ -6,6 +6,7 @@ import type { MenuItem } from "../types";
 const props = defineProps<{
   x: number;
   y: number;
+  heading?: string;
   items: MenuItem[];
 }>();
 
@@ -74,24 +75,30 @@ onBeforeUnmount(() => {
       <div
         ref="menuRef"
         class="canvas-menu"
+        :class="{ 'has-heading': heading }"
         role="menu"
         :style="position"
         @contextmenu.prevent
         @pointerdown.stop
       >
+        <div v-if="heading" class="canvas-menu-heading">{{ heading }}</div>
+        <div v-if="heading" class="canvas-menu-sep" role="separator"></div>
         <template v-for="(item, index) in items" :key="item.id ?? `sep-${index}`">
           <div v-if="item.separator" class="canvas-menu-sep" role="separator"></div>
           <button
             v-else
             type="button"
             class="menu-item canvas-menu-item"
-            :class="{ danger: item.danger }"
+            :class="{ danger: item.danger, 'has-hint': item.hint }"
             role="menuitem"
             :disabled="item.disabled"
             @click="$emit('select', item.id ?? '')"
           >
             <Icon v-if="item.icon" :name="item.icon" :size="14" />
-            <span class="canvas-menu-label">{{ item.label }}</span>
+            <span class="canvas-menu-copy">
+              <span class="canvas-menu-label">{{ item.label }}</span>
+              <span v-if="item.hint" class="canvas-menu-hint">{{ item.hint }}</span>
+            </span>
           </button>
         </template>
       </div>

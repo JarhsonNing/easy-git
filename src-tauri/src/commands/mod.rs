@@ -1,6 +1,8 @@
 pub mod ai;
 pub mod branch;
 pub mod gitlab;
+pub mod gitlab_projects;
+pub mod remote;
 pub mod repo;
 pub mod settings;
 pub mod workspace;

@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "../components/Icon.vue";
 import DeltaMark from "../components/DeltaMark.vue";
 import BranchRail from "../components/BranchRail.vue";
 import CanvasMenu from "../components/CanvasMenu.vue";
 import ActionDialog from "../components/ActionDialog.vue";
 import CommitComposer from "../components/CommitComposer.vue";
+import CommitDiffView from "../components/CommitDiffView.vue";
+import ChangesPanel from "../components/ChangesPanel.vue";
 import WorkingDiff from "../components/WorkingDiff.vue";
-import WorkspaceRail from "../components/WorkspaceRail.vue";
 import {
   abortOperation as abortGitOperation,
+  addRemote as addGitRemote,
   cherryPick as cherryPickCommit,
+  cherryPickMany as cherryPickCommits,
   checkoutBranch as checkoutGitBranch,
   checkoutCommit as checkoutGitCommit,
   continueOperation as continueGitOperation,
@@ -18,17 +21,25 @@ import {
   createTag as createGitTag,
   deleteBranch as deleteGitBranch,
   deleteTag as deleteGitTag,
+  diffCommits as diffGitCommits,
+  errorText,
   fetchRemote as fetchGitRemote,
+  getCommitDiff,
   mergeBranch as mergeGitBranches,
+  pruneRemote as pruneGitRemote,
   pullBranch as pullGitBranch,
   pushBranch as pushGitBranch,
   rebaseBranch as rebaseGitBranch,
+  removeRemote as removeGitRemote,
   renameBranch as renameGitBranch,
+  renameRemote as renameGitRemote,
   resetBranch as resetGitBranch,
   revertCommit as revertGitCommit,
+  setRemoteUrl as setGitRemoteUrl,
 } from "../lib/api";
 import {
   clearNotice,
+  clearSelection,
   detail,
   detailLoading,
   error as storeError,
@@ -40,51 +51,60 @@ import {
   operation,
   refs,
   refreshRepo,
+  remotes,
   rows,
   runOperation,
   selectBranch,
   selectCommit,
+  selectCommits,
   selectOid,
+  selectWip,
   selectedBranch,
   selectedOid,
+  selectedOids,
   session,
   setNotice,
   status,
+  wipSelected,
 } from "../stores/repo";
 import { navigate } from "../stores/ui";
+import { requestCreateMergeRequest } from "../stores/mr";
+import { setDragGhost } from "../lib/dragGhost";
 import {
   applyHunkByIndex,
   applyStash,
-  changeCount,
   diffLoading,
   discardFile,
-  enterChanges,
+  discardMany,
+  enterWorkspace,
   files as workingFiles,
   filesTruncated,
   fileDiff,
-  panelMode,
   refreshWorkspace,
   removeStash,
   resetWorkspace,
+  reuseCommitMessage,
   selectFile,
   selected as selectedFileKey,
-  stageEverything,
+  stageMany,
   stashEverything,
   stashes,
   toggleFile,
-  unstageEverything,
+  unstageMany,
   workspaceLoading,
-  type PanelMode,
 } from "../stores/workspace";
 import type {
   ActionDialogConfig,
   BranchInfo,
   CanvasDragSource,
+  CommitDiff,
   CommitRow,
   DialogValues,
+  LaneParent,
   MenuItem,
   OperationKind,
   RefLabel,
+  RemoteInfo,
   ResetMode,
   StashEntry,
   TagInfo,
@@ -101,11 +121,25 @@ const copied = ref(false);
 const railOpen = ref(false);
 const dragSource = ref<CanvasDragSource | null>(null);
 const dropTarget = ref<string | null>(null);
+const filterQuery = ref("");
+const anchorOid = ref<string | null>(null);
+const selectedStash = ref<StashEntry | null>(null);
+const centerMode = ref<"graph" | "working" | "commit" | "compare">("graph");
+const commitDiff = ref<CommitDiff | null>(null);
+const commitDiffLoading = ref(false);
+const commitFilePath = ref<string | null>(null);
+const compareDiff = ref<CommitDiff | null>(null);
+const compareLoading = ref(false);
+const comparePair = ref<{ from: string; to: string } | null>(null);
+let commitDiffRequest = 0;
+let compareRequest = 0;
 
 type MenuContext =
   | { type: "branch"; branch: BranchInfo }
   | { type: "commit"; row: CommitRow }
-  | { type: "tag"; tag: TagInfo };
+  | { type: "tag"; tag: TagInfo }
+  | { type: "stash"; stash: StashEntry }
+  | { type: "remote"; remote: RemoteInfo };
 
 interface MenuState {
   x: number;
@@ -115,6 +149,17 @@ interface MenuState {
 }
 
 const menu = ref<MenuState | null>(null);
+const hoverOid = ref<string | null>(null);
+const dropLabel = ref<string | null>(null);
+const railTarget = ref<BranchInfo | null>(null);
+interface DropMenuState {
+  x: number;
+  y: number;
+  heading: string;
+  items: MenuItem[];
+  run: (id: string) => void | Promise<void>;
+}
+const dropMenu = ref<DropMenuState | null>(null);
 const dialog = ref<{
   config: ActionDialogConfig;
   run: (values: DialogValues) => Promise<void>;
@@ -130,6 +175,37 @@ const headLabel = computed(() => {
 const changes = computed(() => {
   if (!status.value) return 0;
   return status.value.staged + status.value.unstaged + status.value.untracked;
+});
+const dragHint = computed(() => {
+  const source = dragSource.value;
+  if (!source) return "";
+  if (source.type === "commit") {
+    const target = dropLabel.value ?? railTarget.value?.name;
+    return target
+      ? `松开：把 ${source.shortId} 拣选到 ${target}`
+      : `把 ${source.shortId} 拖到本地分支上拣选`;
+  }
+  const target = dropTarget.value;
+  if (target?.startsWith("commit:")) {
+    return `松开：把 ${source.branch.name} 重置或变基到 ${dropLabel.value}`;
+  }
+  if (target?.startsWith("branch:")) {
+    if (target.startsWith("branch:remote:")) {
+      return `松开：${source.branch.name} → ${dropLabel.value}，新建合并请求`;
+    }
+    return source.branch.kind === "local"
+      ? `松开：${source.branch.name} → ${dropLabel.value}，选择合并、变基或新建合并请求`
+      : `松开：${source.branch.name} → ${dropLabel.value}，选择合并或新建合并请求`;
+  }
+  if (railTarget.value) {
+    if (railTarget.value.kind === "remote") {
+      return `松开：${source.branch.name} → ${railTarget.value.name}，新建合并请求`;
+    }
+    return source.branch.kind === "local"
+      ? `松开：${source.branch.name} → ${railTarget.value.name}，选择合并、变基或新建合并请求`
+      : `松开：${source.branch.name} → ${railTarget.value.name}，选择合并或新建合并请求`;
+  }
+  return `把 ${source.branch.name} 拖到分支或提交上执行操作`;
 });
 const operationStateKind = computed<OperationKind | null>(() =>
   notice.value?.state ? operationKind(notice.value.state) : null,
@@ -153,8 +229,107 @@ const detailRow = computed<CommitRow | null>(() => {
   };
 });
 
+const isFiltering = computed(() => filterQuery.value.trim().length > 0);
+
+const visibleRows = computed<CommitRow[]>(() => {
+  if (!isFiltering.value) return rows.value;
+  return relayoutRows(rows.value, visibleMatches.value);
+});
+
+const visibleMatches = computed<CommitRow[]>(() => {
+  const needle = filterQuery.value.trim().toLowerCase();
+  if (!needle) return rows.value;
+  return rows.value.filter(
+    (row) =>
+      row.summary.toLowerCase().includes(needle) ||
+      row.authorName.toLowerCase().includes(needle) ||
+      row.shortId.toLowerCase().includes(needle) ||
+      row.refs.some((label) => label.name.toLowerCase().includes(needle)),
+  );
+});
+
+function relayoutRows(all: CommitRow[], source: CommitRow[]): CommitRow[] {
+  const byOid = new Map(all.map((row) => [row.oid, row]));
+  const visible = new Set(source.map((row) => row.oid));
+  const nearestMemo = new Map<string, string | null>();
+
+  const nearestVisible = (oid: string): string | null => {
+    if (visible.has(oid)) return oid;
+    if (nearestMemo.has(oid)) return nearestMemo.get(oid) ?? null;
+    const row = byOid.get(oid);
+    if (!row) {
+      nearestMemo.set(oid, null);
+      return null;
+    }
+    let found: string | null = null;
+    for (const parent of row.parents) {
+      found = nearestVisible(parent.oid);
+      if (found) break;
+    }
+    nearestMemo.set(oid, found);
+    return found;
+  };
+
+  const lanes: (string | null)[] = [];
+  const result: CommitRow[] = [];
+
+  for (const row of source) {
+    let lane = lanes.indexOf(row.oid);
+    if (lane === -1) {
+      lane = lanes.indexOf(null);
+      if (lane === -1) {
+        lane = lanes.length;
+        lanes.push(null);
+      }
+    }
+
+    const parentOids: string[] = [];
+    for (const parent of row.parents) {
+      const target = nearestVisible(parent.oid);
+      if (target && target !== row.oid && !parentOids.includes(target)) {
+        parentOids.push(target);
+      }
+    }
+
+    const parents: LaneParent[] = [];
+    parentOids.forEach((oid, position) => {
+      let targetLane = lanes.indexOf(oid);
+      if (position === 0) {
+        targetLane = lane;
+      } else if (targetLane === -1 || targetLane === lane) {
+        targetLane = lanes.indexOf(null);
+        if (targetLane === -1) {
+          targetLane = lanes.length;
+          lanes.push(null);
+        }
+      }
+      lanes[targetLane] = oid;
+      parents.push({ oid, lane: targetLane });
+    });
+    if (!parentOids.length) lanes[lane] = null;
+
+    const through: number[] = [];
+    for (let index = 0; index < lanes.length; index += 1) {
+      if (
+        lanes[index] !== null &&
+        index !== lane &&
+        !parents.some((parent) => parent.lane === index)
+      ) {
+        through.push(index);
+      }
+    }
+    while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
+
+    result.push({ ...row, lane, parents, through });
+  }
+
+  return result;
+}
+
+const originalRowsByOid = computed(() => new Map(rows.value.map((row) => [row.oid, row])));
+
 const maxLane = computed(() =>
-  rows.value.reduce((max, row) => {
+  visibleRows.value.reduce((max, row) => {
     let next = Math.max(max, row.lane);
     for (const lane of row.through) next = Math.max(next, lane);
     for (const parent of row.parents) next = Math.max(next, parent.lane);
@@ -164,10 +339,13 @@ const maxLane = computed(() =>
 
 const laneWidth = computed(() => {
   const count = maxLane.value + 1;
-  return Math.max(10, Math.min(18, Math.floor(120 / count)));
+  return Math.max(12, Math.min(22, Math.floor(140 / count)));
 });
 
-const graphWidth = computed(() => (maxLane.value + 1) * laneWidth.value + GRAPH_PADDING * 2);
+const graphWidth = computed(() =>
+  Math.max(92, (maxLane.value + 1) * laneWidth.value + GRAPH_PADDING * 2),
+);
+const wipNodeLeft = computed(() => laneX(0) - 6.5);
 
 function laneX(lane: number): number {
   return GRAPH_PADDING + lane * laneWidth.value + laneWidth.value / 2;
@@ -175,6 +353,59 @@ function laneX(lane: number): number {
 
 function laneColor(lane: number): string {
   return PALETTE[lane % PALETTE.length];
+}
+
+interface RowColorPlan {
+  node: string;
+  through: { lane: number; color: string }[];
+  parents: string[];
+}
+
+const colorPlan = computed(() => {
+  const plan = new Map<string, RowColorPlan>();
+  const laneColors: (string | null)[] = [];
+  let cursor = 0;
+
+  const pickColor = () => {
+    const active = new Set(laneColors.filter((color): color is string => color !== null));
+    for (let offset = 0; offset < PALETTE.length; offset += 1) {
+      const color = PALETTE[(cursor + offset) % PALETTE.length];
+      if (!active.has(color)) {
+        cursor = (cursor + offset + 1) % PALETTE.length;
+        return color;
+      }
+    }
+    const color = PALETTE[cursor % PALETTE.length];
+    cursor = (cursor + 1) % PALETTE.length;
+    return color;
+  };
+  const ensure = (lane: number) => {
+    if (!laneColors[lane]) laneColors[lane] = pickColor();
+    return laneColors[lane];
+  };
+
+  for (const row of visibleRows.value) {
+    const through = row.through.map((lane) => ({ lane, color: ensure(lane) }));
+    const node = ensure(row.lane);
+    const parents = row.parents.map((parent, index) => {
+      const existing = laneColors[parent.lane];
+      if (existing) return index === 0 ? node : existing;
+      const color = index === 0 ? node : pickColor();
+      laneColors[parent.lane] = color;
+      return color;
+    });
+    plan.set(row.oid, { node, through, parents });
+
+    const keep = new Set<number>([...row.through, ...row.parents.map((parent) => parent.lane)]);
+    for (let lane = 0; lane < laneColors.length; lane += 1) {
+      if (!keep.has(lane)) laneColors[lane] = null;
+    }
+  }
+  return plan;
+});
+
+function rowColor(row: CommitRow): string {
+  return colorPlan.value.get(row.oid)?.node ?? laneColor(row.lane);
 }
 
 function withAlpha(hex: string, alpha: number): string {
@@ -189,7 +420,7 @@ function drawGraph() {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const width = graphWidth.value;
-  const height = Math.max(1, rows.value.length * ROW_HEIGHT);
+  const height = Math.max(1, visibleRows.value.length * ROW_HEIGHT);
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
@@ -201,25 +432,50 @@ function drawGraph() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ctx.lineCap = "round";
-  ctx.lineWidth = 2.2;
+  ctx.lineJoin = "round";
 
-  for (let index = 0; index < rows.value.length; index += 1) {
-    const row = rows.value[index];
+  const targetOid = dropTarget.value?.startsWith("commit:")
+    ? dropTarget.value.slice("commit:".length)
+    : null;
+  const focusOid = hoverOid.value ?? targetOid;
+  const focusRow = focusOid
+    ? visibleRows.value.find((row) => row.oid === focusOid) ?? null
+    : null;
+  const focusLane = focusRow?.lane ?? null;
+  const laneAlpha = (lane: number, alpha: number) => {
+    if (focusLane === null) return alpha;
+    return lane === focusLane ? Math.min(1, alpha + 0.2) : alpha * 0.24;
+  };
+  const laneStroke = (lane: number) => (focusLane !== null && lane === focusLane ? 3.4 : 2.8);
+
+  for (let index = 0; index < visibleRows.value.length; index += 1) {
+    const row = visibleRows.value[index];
     const centerY = index * ROW_HEIGHT + ROW_HEIGHT / 2;
     const nextY = Math.min(centerY + ROW_HEIGHT, height);
     const nodeX = laneX(row.lane);
 
-    for (const lane of row.through) {
-      ctx.strokeStyle = withAlpha(laneColor(lane), 0.65);
+    const plan = colorPlan.value.get(row.oid);
+    for (let laneIndex = 0; laneIndex < row.through.length; laneIndex += 1) {
+      const lane = row.through[laneIndex];
+      ctx.lineWidth = laneStroke(lane);
+      ctx.strokeStyle = withAlpha(
+        plan?.through[laneIndex]?.color ?? laneColor(lane),
+        laneAlpha(lane, 0.92),
+      );
       ctx.beginPath();
       ctx.moveTo(laneX(lane), centerY);
       ctx.lineTo(laneX(lane), nextY);
       ctx.stroke();
     }
 
-    for (const parent of row.parents) {
+    for (let parentIndex = 0; parentIndex < row.parents.length; parentIndex += 1) {
+      const parent = row.parents[parentIndex];
       const targetX = laneX(parent.lane);
-      ctx.strokeStyle = withAlpha(laneColor(parent.lane), 0.9);
+      ctx.lineWidth = laneStroke(parent.lane);
+      ctx.strokeStyle = withAlpha(
+        plan?.parents[parentIndex] ?? laneColor(parent.lane),
+        laneAlpha(parent.lane, 0.96),
+      );
       ctx.beginPath();
       ctx.moveTo(nodeX, centerY);
       if (parent.lane === row.lane) {
@@ -227,9 +483,9 @@ function drawGraph() {
       } else {
         ctx.bezierCurveTo(
           nodeX,
-          centerY + ROW_HEIGHT * 0.55,
+          centerY + ROW_HEIGHT * 0.62,
           targetX,
-          centerY + ROW_HEIGHT * 0.45,
+          nextY - ROW_HEIGHT * 0.62,
           targetX,
           nextY,
         );
@@ -237,21 +493,80 @@ function drawGraph() {
       ctx.stroke();
     }
 
-    const selected = selectedOid.value === row.oid;
-    if (selected) {
+    const selected = selectedOids.value.includes(row.oid);
+    const focused = row.oid === focusRow?.oid;
+    const staged = dropTarget.value === `commit:${row.oid}`;
+    const lane = plan?.node ?? laneColor(row.lane);
+    const faded = focusLane !== null && row.lane !== focusLane && !selected && !staged;
+    const parentCount = originalRowsByOid.value.get(row.oid)?.parents.length ?? row.parents.length;
+    const merge = parentCount > 1;
+    const root = parentCount === 0;
+
+    ctx.globalAlpha = faded ? 0.42 : 1;
+
+    if (selected || focused || staged) {
       ctx.beginPath();
-      ctx.arc(nodeX, centerY, 9, 0, Math.PI * 2);
-      ctx.fillStyle = withAlpha(laneColor(row.lane), 0.2);
+      ctx.arc(nodeX, centerY, staged ? 14.5 : 13.5, 0, Math.PI * 2);
+      ctx.fillStyle = withAlpha(lane, staged ? 0.24 : 0.15);
       ctx.fill();
     }
-    ctx.beginPath();
-    ctx.arc(nodeX, centerY, selected ? 5 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = laneColor(row.lane);
-    ctx.fill();
-    ctx.strokeStyle = "#FBF7EE";
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
-    ctx.lineWidth = 2.2;
+
+    if (root) {
+      ctx.beginPath();
+      ctx.arc(nodeX, centerY, 7.2, 0, Math.PI * 2);
+      ctx.fillStyle = "#FBF7EE";
+      ctx.fill();
+      ctx.strokeStyle = lane;
+      ctx.lineWidth = 2.6;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(nodeX, centerY, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = lane;
+      ctx.fill();
+    } else {
+      if (merge) {
+        ctx.beginPath();
+        ctx.arc(nodeX, centerY, 10.2, 0, Math.PI * 2);
+        ctx.fillStyle = "#FBF7EE";
+        ctx.fill();
+        ctx.strokeStyle = lane;
+        ctx.lineWidth = 2.4;
+        ctx.stroke();
+      }
+      const radius = merge ? 7.4 : 8.4;
+      ctx.beginPath();
+      ctx.arc(nodeX, centerY, radius, 0, Math.PI * 2);
+      ctx.fillStyle = lane;
+      ctx.fill();
+      if (!merge) {
+        ctx.strokeStyle = "#FBF7EE";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#FBF7EE";
+      ctx.font = `${merge ? 7.6 : 8.4}px "Public Sans", "Microsoft YaHei", "PingFang SC", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(authorInitials(row.authorName), nodeX, centerY + 0.4);
+    }
+
+    if (staged) {
+      ctx.beginPath();
+      ctx.arc(nodeX, centerY, 15, 0, Math.PI * 2);
+      ctx.strokeStyle = withAlpha("#1F6E6A", 0.85);
+      ctx.lineWidth = 1.7;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (selected) {
+      ctx.beginPath();
+      ctx.arc(nodeX, centerY, 13, 0, Math.PI * 2);
+      ctx.strokeStyle = withAlpha(lane, 0.55);
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -259,22 +574,68 @@ function scheduleDraw() {
   void nextTick(drawGraph);
 }
 
-watch([rows, selectedOid, graphWidth], scheduleDraw);
+watch([visibleRows, selectedOids, graphWidth, hoverOid, dropTarget], scheduleDraw);
+watch(centerMode, (mode) => {
+  if (mode === "graph") scheduleDraw();
+});
 onMounted(scheduleDraw);
 
-function visibleRefs(row: CommitRow): RefLabel[] {
-  return row.refs.slice(0, 3);
+interface RefStackLine {
+  key: "local" | "tracking";
+  labels: RefLabel[];
+  hidden: number;
+  hiddenNames: string;
 }
 
-function extraRefs(row: CommitRow): number {
-  return Math.max(0, row.refs.length - 3);
+const REF_LINE_LIMIT = 1;
+
+function refStackLine(key: RefStackLine["key"], labels: RefLabel[]): RefStackLine | null {
+  if (!labels.length) return null;
+  return {
+    key,
+    labels: labels.slice(0, REF_LINE_LIMIT),
+    hidden: Math.max(0, labels.length - REF_LINE_LIMIT),
+    hiddenNames: labels
+      .slice(REF_LINE_LIMIT)
+      .map((label) => label.name)
+      .join(" · "),
+  };
 }
 
-function extraRefNames(row: CommitRow): string {
-  return row.refs
-    .slice(3)
-    .map((label) => label.name)
-    .join(" · ");
+function rowRefStack(row: CommitRow): RefStackLine[] {
+  const local: RefLabel[] = [];
+  const tracking: RefLabel[] = [];
+  let head: RefLabel | null = null;
+  for (const label of row.refs) {
+    if (label.kind === "head") {
+      head = label;
+    } else if (label.kind === "branch") {
+      local.push(label);
+    } else if (label.kind === "remote") {
+      if (!label.name.endsWith("/HEAD")) tracking.push(label);
+    } else if (label.kind === "tag") {
+      tracking.push(label);
+    }
+  }
+  if (head && !local.length) local.unshift(head);
+  local.sort((a, b) => Number(isCurrentRef(b)) - Number(isCurrentRef(a)));
+  const current = currentBranch.value;
+  const upstream = current?.upstream ?? "";
+  tracking.sort((a, b) => remotePriority(b, upstream, current?.name) - remotePriority(a, upstream, current?.name));
+  return [refStackLine("local", local), refStackLine("tracking", tracking)].filter(
+    (line): line is RefStackLine => line !== null,
+  );
+}
+
+function isCurrentRef(label: RefLabel): boolean {
+  return branchForRef(label)?.isCurrent ?? false;
+}
+
+function remotePriority(label: RefLabel, upstream: string, currentName?: string): number {
+  if (label.kind !== "remote") return -1;
+  if (upstream && label.name === upstream) return 2;
+  if (currentName && label.name.endsWith(`/${currentName}`)) return 1;
+  return 0;
 }
 
 function branchForRef(label: RefLabel): BranchInfo | null {
@@ -285,6 +646,11 @@ function branchForRef(label: RefLabel): BranchInfo | null {
     return refs.value?.remote.find((branch) => branch.name === label.name) ?? null;
   }
   return null;
+}
+
+function isRefDropTarget(label: RefLabel): boolean {
+  const branch = branchForRef(label);
+  return !!branch && dropTarget.value === `branch:${branch.kind}:${branch.name}`;
 }
 
 function tagForRef(label: RefLabel): TagInfo | null {
@@ -313,6 +679,17 @@ function initial(name: string): string {
   return name.trim().slice(0, 1).toUpperCase() || "G";
 }
 
+function authorInitials(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "·";
+  if (/^[\u3400-\u9fff]/.test(trimmed)) return trimmed.slice(0, 1);
+  const parts = trimmed.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
+}
+
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
   month: "2-digit",
@@ -333,6 +710,12 @@ function formatRelative(seconds: number): string {
 
 function formatDateTime(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString("zh-CN");
+}
+
+function formatIsoDate(value: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
 }
 
 function operationKind(state: string): OperationKind | null {
@@ -394,14 +777,135 @@ function revealOid(oid: string) {
   });
 }
 
-function onSelect(row: CommitRow) {
+const wipCount = computed(() => {
+  const value = status.value;
+  return value
+    ? value.staged + value.unstaged + value.untracked + value.conflicted
+    : workingFiles.value.length;
+});
+
+const workspaceStats = computed(() => {
+  let additions = 0;
+  let deletions = 0;
+  for (const file of workingFiles.value) {
+    additions += file.additions;
+    deletions += file.deletions;
+  }
+  return { additions, deletions };
+});
+
+const selectedRows = computed(() =>
+  rows.value.filter((row) => selectedOids.value.includes(row.oid)),
+);
+
+const selectedRowsOldestFirst = computed(() => [...selectedRows.value].reverse());
+
+const commitDiffTitle = computed(
+  () => detail.value?.summary ?? (selectedOid.value ? selectedOid.value.slice(0, 7) : "提交差异"),
+);
+
+const commitDiffSubtitle = computed(() =>
+  detail.value
+    ? `${detail.value.shortId} · ${formatDateTime(detail.value.authoredAt)}`
+    : "",
+);
+
+const compareTitle = computed(() => {
+  const pair = comparePair.value;
+  if (!pair) return "提交对比";
+  const from = rows.value.find((row) => row.oid === pair.from);
+  const to = rows.value.find((row) => row.oid === pair.to);
+  return `对比 ${from?.shortId ?? pair.from.slice(0, 7)} → ${to?.shortId ?? pair.to.slice(0, 7)}`;
+});
+
+const compareSubtitle = computed(() => {
+  const pair = comparePair.value;
+  if (!pair) return "";
+  const from = rows.value.find((row) => row.oid === pair.from);
+  const to = rows.value.find((row) => row.oid === pair.to);
+  if (!from || !to) return "";
+  return `${from.summary} → ${to.summary}`;
+});
+
+function resetCenter() {
+  centerMode.value = "graph";
+  commitDiff.value = null;
+  commitDiffLoading.value = false;
+  commitFilePath.value = null;
+  compareDiff.value = null;
+  compareLoading.value = false;
+  comparePair.value = null;
+  commitDiffRequest += 1;
+  compareRequest += 1;
+}
+
+function focusWip() {
+  railOpen.value = false;
   copied.value = false;
+  selectedStash.value = null;
+  anchorOid.value = null;
+  resetCenter();
+  selectWip();
+  if (!workingFiles.value.length && !workspaceLoading.value) void refreshWorkspace();
+}
+
+function focusStash(entry: StashEntry) {
+  railOpen.value = false;
+  copied.value = false;
+  anchorOid.value = null;
+  resetCenter();
+  clearSelection();
+  selectedStash.value = entry;
+}
+
+function selectSingle(row: CommitRow) {
+  copied.value = false;
+  selectedStash.value = null;
+  anchorOid.value = row.oid;
+  resetCenter();
   void selectCommit(row);
+}
+
+function onSelect(row: CommitRow) {
+  selectSingle(row);
+}
+
+function onRowClick(event: MouseEvent, row: CommitRow) {
+  copied.value = false;
+  selectedStash.value = null;
+  resetCenter();
+  const range = isFiltering.value ? visibleRows.value : rows.value;
+  if (event.shiftKey && anchorOid.value) {
+    const from = range.findIndex((item) => item.oid === anchorOid.value);
+    const to = range.findIndex((item) => item.oid === row.oid);
+    if (from !== -1 && to !== -1) {
+      const [low, high] = from < to ? [from, to] : [to, from];
+      void selectCommits(
+        range.slice(low, high + 1).map((item) => item.oid),
+        row.oid,
+      );
+      return;
+    }
+  }
+  if (event.ctrlKey || event.metaKey) {
+    const current = selectedOids.value;
+    const next = current.includes(row.oid)
+      ? current.filter((oid) => oid !== row.oid)
+      : [...current, row.oid];
+    anchorOid.value = row.oid;
+    void selectCommits(next.length ? next : [row.oid], row.oid);
+    return;
+  }
+  selectSingle(row);
 }
 
 async function focusBranch(branch: BranchInfo) {
   railOpen.value = false;
   copied.value = false;
+  selectedStash.value = null;
+  filterQuery.value = "";
+  resetCenter();
+  anchorOid.value = branch.oid;
   await selectBranch(branch);
   revealOid(branch.oid);
 }
@@ -409,8 +913,139 @@ async function focusBranch(branch: BranchInfo) {
 async function focusTag(tag: TagInfo) {
   railOpen.value = false;
   copied.value = false;
+  selectedStash.value = null;
+  filterQuery.value = "";
+  resetCenter();
+  anchorOid.value = tag.oid;
   await selectOid(tag.oid);
   revealOid(tag.oid);
+}
+
+async function openWorkingFile(file: WorkingFile) {
+  selectedStash.value = null;
+  selectWip();
+  centerMode.value = "working";
+  await selectFile(file);
+}
+
+async function loadCommitDiff(oid: string): Promise<CommitDiff | null> {
+  const request = ++commitDiffRequest;
+  commitDiffLoading.value = true;
+  try {
+    const result = await getCommitDiff(oid);
+    if (request === commitDiffRequest) commitDiff.value = result;
+    return request === commitDiffRequest ? result : null;
+  } catch (e) {
+    if (request === commitDiffRequest) {
+      commitDiff.value = null;
+      setNotice({ tone: "error", message: errorText(e) });
+    }
+    return null;
+  } finally {
+    if (request === commitDiffRequest) commitDiffLoading.value = false;
+  }
+}
+
+async function openCommitDiff(path: string | null = null) {
+  const oid = detail.value?.oid ?? selectedOid.value;
+  if (!oid) return;
+  commitFilePath.value = path;
+  centerMode.value = "commit";
+  if (commitDiff.value?.oid === oid) return;
+  commitDiff.value = null;
+  await loadCommitDiff(oid);
+}
+
+async function openCompare() {
+  if (selectedOids.value.length !== 2) return;
+  const positions = selectedOids.value
+    .map((oid) => rows.value.findIndex((row) => row.oid === oid))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b);
+  if (positions.length !== 2) {
+    setNotice({ tone: "error", message: "这两个提交不在当前已加载的历史里，请多加载一些提交后再对比。" });
+    return;
+  }
+  const newer = rows.value[positions[0]];
+  const older = rows.value[positions[1]];
+  comparePair.value = { from: older.oid, to: newer.oid };
+  centerMode.value = "compare";
+  compareDiff.value = null;
+  compareLoading.value = true;
+  const request = ++compareRequest;
+  try {
+    const result = await diffGitCommits(older.oid, newer.oid);
+    if (request === compareRequest) compareDiff.value = result;
+  } catch (e) {
+    if (request === compareRequest) {
+      compareDiff.value = null;
+      setNotice({ tone: "error", message: errorText(e) });
+    }
+  } finally {
+    if (request === compareRequest) compareLoading.value = false;
+  }
+}
+
+function copySelectedHashes() {
+  if (!selectedRows.value.length) return;
+  const hashes = selectedRows.value.map((row) => row.oid).join("\n");
+  void copyText(hashes, `已复制 ${selectedRows.value.length} 个提交哈希`);
+}
+
+function clearMultiSelection() {
+  const primary = selectedOid.value ?? selectedOids.value[0];
+  const row = rows.value.find((item) => item.oid === primary);
+  if (row) selectSingle(row);
+  else focusWip();
+}
+
+async function onReuseMessage(oid: string) {
+  const written = await reuseCommitMessage(oid);
+  if (!written) return;
+  focusWip();
+  setNotice({ tone: "success", message: "已把提交信息填入提交框，按需修改后提交。" });
+}
+
+function onStageFiles(selection: WorkingFile[]) {
+  void stageMany(selection);
+}
+
+function onUnstageFiles(selection: WorkingFile[]) {
+  void unstageMany(selection);
+}
+
+function openDiscardMany(selection: WorkingFile[]) {
+  if (!selection.length) return;
+  const preview = selection
+    .slice(0, 4)
+    .map((file) => file.path)
+    .join("、");
+  showDialog(
+    {
+      title: `丢弃 ${selection.length} 个文件的更改`,
+      description:
+        selection.length > 4
+          ? `${preview} 等文件的未提交改动会被还原，未跟踪文件会被删除。`
+          : `${preview} 的未提交改动会被还原，未跟踪文件会被删除。`,
+      confirmLabel: "丢弃更改",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          danger: true,
+          text: "这个操作不可撤销，且不会写入任何可以恢复的地方。确认后再继续。",
+        },
+      ],
+    },
+    async () => {
+      await discardMany(selection);
+    },
+  );
+}
+
+function openStashMenuFromRail(payload: { x: number; y: number; stash: StashEntry }) {
+  openStashMenu(payload.x, payload.y, payload.stash);
 }
 
 async function focusCurrentBranch() {
@@ -450,11 +1085,23 @@ function onRefClick(row: CommitRow, label: RefLabel) {
 function resetDrag() {
   dragSource.value = null;
   dropTarget.value = null;
+  dropLabel.value = null;
+  railTarget.value = null;
+}
+
+function dragPoint(event: DragEvent): { x: number; y: number } {
+  if (event.clientX || event.clientY) return { x: event.clientX, y: event.clientY };
+  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+  return rect
+    ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    : { x: 240, y: 240 };
 }
 
 function onBranchDragStart(branch: BranchInfo) {
   dragSource.value = { type: "branch", branch };
   dropTarget.value = null;
+  dropLabel.value = null;
+  menu.value = null;
 }
 
 function onRowDragStart(event: DragEvent, row: CommitRow) {
@@ -469,6 +1116,9 @@ function onRowDragStart(event: DragEvent, row: CommitRow) {
     summary: row.summary,
   };
   dropTarget.value = null;
+  dropLabel.value = null;
+  menu.value = null;
+  setDragGhost(event, `${row.shortId} · ${row.summary}`, "commit");
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", row.oid);
@@ -483,6 +1133,9 @@ function onRefDragStart(event: DragEvent, branch: BranchInfo) {
   }
   dragSource.value = { type: "branch", branch };
   dropTarget.value = null;
+  dropLabel.value = null;
+  menu.value = null;
+  setDragGhost(event, branch.name, branch.kind === "remote" ? "remote" : "branch");
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", `${branch.kind}:${branch.name}`);
@@ -502,17 +1155,43 @@ function refDragOver(event: DragEvent, label: RefLabel) {
   if (!dragSource.value) return;
   event.stopPropagation();
   const branch = branchForRef(label);
-  if (branch?.kind === "local") {
-    onBranchDragOver(event, branch);
+  if (branch) onBranchDragOver(event, branch);
+}
+
+function refDragLeave(event: DragEvent, label: RefLabel) {
+  const current = event.currentTarget as HTMLElement;
+  if (current.contains(event.relatedTarget as Node | null)) return;
+  const branch = branchForRef(label);
+  if (branch && dropTarget.value === `branch:${branch.kind}:${branch.name}`) {
+    dropTarget.value = null;
+    dropLabel.value = null;
   }
 }
 
 function onBranchDragOver(event: DragEvent, branch: BranchInfo) {
-  if (!dragSource.value || branch.kind !== "local" || operation.value) return;
+  const source = dragSource.value;
+  if (!source || operation.value) return;
+  const key = `branch:${branch.kind}:${branch.name}`;
+  if (source.type === "commit") {
+    if (branch.kind !== "local") {
+      if (dropTarget.value === key) {
+        dropTarget.value = null;
+        dropLabel.value = null;
+      }
+      return;
+    }
+  } else if (source.branch.kind === branch.kind && source.branch.name === branch.name) {
+    if (dropTarget.value === key) {
+      dropTarget.value = null;
+      dropLabel.value = null;
+    }
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-  dropTarget.value = `branch:${branch.kind}:${branch.name}`;
+  dropTarget.value = key;
+  dropLabel.value = branch.name;
 }
 
 function onRowDragOver(event: DragEvent, row: CommitRow) {
@@ -521,15 +1200,46 @@ function onRowDragOver(event: DragEvent, row: CommitRow) {
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
   dropTarget.value = `commit:${row.oid}`;
+  dropLabel.value = row.shortId;
 }
 
 function onRowDragLeave(event: DragEvent, row: CommitRow) {
   const current = event.currentTarget as HTMLElement;
   if (current.contains(event.relatedTarget as Node | null)) return;
-  if (dropTarget.value === `commit:${row.oid}`) dropTarget.value = null;
+  if (dropTarget.value === `commit:${row.oid}`) {
+    dropTarget.value = null;
+    dropLabel.value = null;
+  }
 }
 
-function handleBranchDrop(branch: BranchInfo) {
+function onScrollDragOver(event: DragEvent) {
+  const element = scrollRef.value;
+  if (!element || !dragSource.value) return;
+  const rect = element.getBoundingClientRect();
+  const edge = 52;
+  if (event.clientY < rect.top + edge) element.scrollTop -= 18;
+  else if (event.clientY > rect.bottom - edge) element.scrollTop += 18;
+}
+
+function openDropMenu(
+  x: number,
+  y: number,
+  heading: string,
+  items: MenuItem[],
+  run: (id: string) => void | Promise<void>,
+) {
+  menu.value = null;
+  dropMenu.value = { x, y, heading, items, run };
+}
+
+function onDropMenuSelect(id: string) {
+  const state = dropMenu.value;
+  dropMenu.value = null;
+  if (!state) return;
+  void state.run(id);
+}
+
+function handleBranchDrop(branch: BranchInfo, x: number, y: number) {
   const source = dragSource.value;
   resetDrag();
   if (!source) return;
@@ -538,26 +1248,78 @@ function handleBranchDrop(branch: BranchInfo) {
       setNotice({ tone: "error", message: "请把提交拖到本地分支上。" });
       return;
     }
-    openCherryPick(source.oid, source.shortId, branch.name);
+    openDropMenu(
+      x,
+      y,
+      `${source.shortId} → ${branch.name}`,
+      [
+        {
+          id: "cherry-pick",
+          label: `拣选 ${source.shortId} 到 ${branch.name}`,
+          hint: "把这次提交的改动应用到目标分支",
+          icon: "git-merge",
+        },
+      ],
+      () => openCherryPick(source.oid, source.shortId, branch.name),
+    );
     return;
   }
   if (source.branch.kind === branch.kind && source.branch.name === branch.name) return;
-  if (branch.kind !== "local") {
-    setNotice({ tone: "error", message: "请把分支拖到本地分支上。" });
+
+  const sourceName = serverBranchName(source.branch);
+  const targetName = serverBranchName(branch);
+  if (sourceName === targetName) {
+    setNotice({ tone: "error", message: "源分支与目标分支相同，无法新建合并请求。" });
     return;
   }
-  openDropBranch(source.branch, branch);
+
+  const items: MenuItem[] = [
+    {
+      id: "merge-request",
+      label: "新建合并请求",
+      hint: `在 GitLab 上创建 ${sourceName} → ${targetName}`,
+      icon: "git-compare",
+    },
+  ];
+  if (branch.kind === "local") {
+    items.push({
+      id: "merge",
+      label: `合并到 ${branch.name}`,
+      hint: `保留 ${source.branch.name} 与 ${branch.name} 的历史`,
+      icon: "git-merge",
+    });
+  }
+  if (branch.kind === "local" && source.branch.kind === "local") {
+    items.push({
+      id: "rebase",
+      label: `将 ${source.branch.name} 变基到 ${branch.name}`,
+      hint: "把来源分支的提交重放到目标之上",
+      icon: "branch",
+    });
+  }
+
+  openDropMenu(x, y, `${source.branch.name} → ${branch.name}`, items, (id) => {
+    if (id === "merge-request") {
+      requestCreateMergeRequest(sourceName, targetName);
+      navigate("mr");
+    } else if (id === "merge") {
+      openMerge(source.branch, branch.name);
+    } else if (id === "rebase") {
+      openRebase(source.branch.name, branch.name, branch.name);
+    }
+  });
 }
 
 function onRefDrop(event: DragEvent, label: RefLabel) {
   event.preventDefault();
   event.stopPropagation();
   const branch = branchForRef(label);
-  if (branch) handleBranchDrop(branch);
+  const point = dragPoint(event);
+  if (branch) handleBranchDrop(branch, point.x, point.y);
   else resetDrag();
 }
 
-function handleCommitDrop(row: CommitRow) {
+function handleCommitDrop(row: CommitRow, x: number, y: number) {
   const source = dragSource.value;
   resetDrag();
   if (!source || source.type !== "branch") return;
@@ -566,13 +1328,79 @@ function handleCommitDrop(row: CommitRow) {
     return;
   }
   if (source.branch.oid === row.oid) return;
-  openDropBranchCommit(source.branch, row.oid, row.shortId);
+
+  openDropMenu(
+    x,
+    y,
+    `${source.branch.name} → ${row.shortId}`,
+    [
+      {
+        id: "reset",
+        label: `重置 ${source.branch.name} 到 ${row.shortId}…`,
+        hint: "选择软、混合或硬重置",
+        icon: "clock",
+      },
+      {
+        id: "rebase",
+        label: `将 ${source.branch.name} 变基到 ${row.shortId}…`,
+        hint: "把分支上的提交重放到此提交之上",
+        icon: "branch",
+      },
+    ],
+    (id) => {
+      if (id === "reset") openReset(source.branch.name, row.oid, row.shortId);
+      else openRebase(source.branch.name, row.shortId, row.oid);
+    },
+  );
 }
 
 function onRowDrop(event: DragEvent, row: CommitRow) {
   event.preventDefault();
   event.stopPropagation();
-  handleCommitDrop(row);
+  const point = dragPoint(event);
+  handleCommitDrop(row, point.x, point.y);
+}
+
+function onRailDragOver(branch: BranchInfo | null) {
+  railTarget.value = branch;
+}
+
+function onRailBranchDrop(payload: { branch: BranchInfo; x: number; y: number }) {
+  handleBranchDrop(payload.branch, payload.x, payload.y);
+}
+
+function isDragSource(label: RefLabel): boolean {
+  const source = dragSource.value;
+  if (!source || source.type !== "branch") return false;
+  const branch = branchForRef(label);
+  return (
+    !!branch && branch.kind === source.branch.kind && branch.name === source.branch.name
+  );
+}
+
+function isRowDragSource(row: CommitRow): boolean {
+  const source = dragSource.value;
+  return source?.type === "commit" && source.oid === row.oid;
+}
+
+function refTitle(label: RefLabel): string {
+  if (label.kind === "branch") return `${label.name} · 双击切换`;
+  if (label.kind === "remote") return `${label.name} · 双击检出`;
+  return label.name;
+}
+
+async function onRefDoubleClick(label: RefLabel) {
+  if (operation.value) return;
+  const branch = branchForRef(label);
+  if (!branch || branch.isCurrent) return;
+  if (branch.kind === "remote") {
+    const local = refs.value?.local.find((item) => item.name === serverBranchName(branch));
+    if (local) {
+      if (!local.isCurrent) await checkoutTo(local);
+      return;
+    }
+  }
+  await checkoutTo(branch);
 }
 
 function openRailMenu(payload: {
@@ -633,6 +1461,24 @@ function openTagMenu(x: number, y: number, tag: TagInfo) {
     y,
     items: tagMenuItems(),
     context: { type: "tag", tag },
+  };
+}
+
+function openStashMenu(x: number, y: number, stash: StashEntry) {
+  menu.value = {
+    x,
+    y,
+    items: stashMenuItems(),
+    context: { type: "stash", stash },
+  };
+}
+
+function openRemoteMenu(payload: { x: number; y: number; remote: RemoteInfo }) {
+  menu.value = {
+    x: payload.x,
+    y: payload.y,
+    items: remoteMenuItems(payload.remote),
+    context: { type: "remote", remote: payload.remote },
   };
 }
 
@@ -729,6 +1575,30 @@ function tagMenuItems(): MenuItem[] {
   ];
 }
 
+function stashMenuItems(): MenuItem[] {
+  return [
+    { id: "apply", label: "应用贮藏", icon: "download" },
+    { id: "pop", label: "弹出贮藏", icon: "upload" },
+    { separator: true },
+    { id: "copy", label: "复制贮藏引用", icon: "copy" },
+    { id: "delete", label: "删除贮藏…", icon: "trash", danger: true },
+  ];
+}
+
+function remoteMenuItems(remote: RemoteInfo): MenuItem[] {
+  return [
+    { id: "fetch", label: "抓取更新", icon: "refresh" },
+    { id: "prune", label: "清理失效分支引用", icon: "tree" },
+    { separator: true },
+    { id: "url", label: "设置远程地址…", icon: "pencil" },
+    { id: "rename", label: "重命名远程…", icon: "branch" },
+    { id: "copy-name", label: "复制远程名", icon: "copy" },
+    { id: "copy-url", label: "复制抓取地址", icon: "copy" },
+    { separator: true },
+    { id: "remove", label: `移除远程 ${remote.name}…`, icon: "trash", danger: true },
+  ];
+}
+
 function onMenuSelect(id: string) {
   const state = menu.value;
   menu.value = null;
@@ -738,9 +1608,198 @@ function onMenuSelect(id: string) {
     void handleBranchAction(id, context.branch);
   } else if (context.type === "commit") {
     void handleCommitAction(id, context.row);
-  } else {
+  } else if (context.type === "tag") {
     void handleTagAction(id, context.tag);
+  } else if (context.type === "remote") {
+    void handleRemoteAction(id, context.remote);
+  } else {
+    void handleStashAction(id, context.stash);
   }
+}
+
+async function handleStashAction(id: string, stash: StashEntry) {
+  switch (id) {
+    case "apply":
+    case "pop": {
+      const ok = await applyStash(stash, id === "pop");
+      if (ok && selectedStash.value?.reference === stash.reference) selectedStash.value = null;
+      break;
+    }
+    case "delete":
+      openStashDrop(stash);
+      break;
+    case "copy":
+      await copyText(stash.reference, `已复制 ${stash.reference}`);
+      break;
+  }
+}
+
+async function handleRemoteAction(id: string, remote: RemoteInfo) {
+  switch (id) {
+    case "fetch":
+      await runOperation(`正在从 ${remote.name} 获取更新…`, () =>
+        fetchGitRemote(remote.name),
+      );
+      break;
+    case "prune":
+      await runOperation(`正在清理 ${remote.name} 的失效分支引用…`, () =>
+        pruneGitRemote(remote.name),
+      );
+      break;
+    case "url":
+      openRemoteUrl(remote);
+      break;
+    case "rename":
+      openRenameRemote(remote);
+      break;
+    case "copy-name":
+      await copyText(remote.name, `已复制远程名 ${remote.name}`);
+      break;
+    case "copy-url":
+      await copyText(remote.fetchUrl, "已复制远程抓取地址");
+      break;
+    case "remove":
+      openRemoveRemote(remote);
+      break;
+  }
+}
+
+function openAddRemote() {
+  showDialog(
+    {
+      title: "添加远程仓库",
+      description: "连接一个 HTTPS、SSH 或本地仓库地址。",
+      confirmLabel: "添加远程",
+      fields: [
+        {
+          kind: "text",
+          key: "name",
+          label: "远程名",
+          value: "origin",
+          required: true,
+          mono: true,
+          help: "通常使用 origin；也可以添加 upstream 等第二个远程。",
+        },
+        {
+          kind: "text",
+          key: "url",
+          label: "远程地址",
+          placeholder: "git@gitlab.example.com:group/repo.git",
+          required: true,
+          mono: true,
+          help: "为避免凭据泄露，HTTP 地址不能包含用户名或密码。",
+        },
+      ],
+    },
+    async (values) => {
+      const name = textValue(values, "name");
+      const url = textValue(values, "url");
+      await runOperation("正在添加远程…", () => addGitRemote(name, url));
+    },
+  );
+}
+
+function openRemoteUrl(remote: RemoteInfo) {
+  const distinctPush = remote.pushUrl && remote.pushUrl !== remote.fetchUrl;
+  const help = remote.hasCredentials
+    ? "已保存地址中的凭据不会回显。未修改的字段会保持原样；如需更换地址，请重新输入完整地址。"
+    : "支持 https://、ssh://、git@host:path 与本地路径。HTTP 地址不能包含用户名或密码。";
+  showDialog(
+    {
+      title: "设置远程地址",
+      description: `更新远程仓库 ${remote.name} 的抓取地址。`,
+      confirmLabel: "保存地址",
+      fields: [
+        {
+          kind: "text",
+          key: "fetchUrl",
+          label: "抓取地址",
+          value: remote.fetchUrl,
+          required: true,
+          mono: true,
+          help,
+        },
+        {
+          kind: "text",
+          key: "pushUrl",
+          label: "推送地址",
+          value: distinctPush ? remote.pushUrl : "",
+          placeholder: "留空则不修改",
+          mono: true,
+          help: "仅当推送地址与抓取地址不同时填写。",
+        },
+      ],
+    },
+    async (values) => {
+      const fetchUrl = textValue(values, "fetchUrl");
+      const pushUrl = textValue(values, "pushUrl");
+      let attempted = false;
+      if (fetchUrl !== remote.fetchUrl) {
+        attempted = true;
+        await runOperation("正在更新抓取地址…", () =>
+          setGitRemoteUrl(remote.name, fetchUrl, false),
+        );
+      }
+      if (pushUrl && pushUrl !== remote.pushUrl) {
+        attempted = true;
+        await runOperation("正在更新推送地址…", () =>
+          setGitRemoteUrl(remote.name, pushUrl, true),
+        );
+      }
+      if (!attempted) {
+        setNotice({ tone: "success", message: "远程地址未修改。" });
+      }
+    },
+  );
+}
+
+function openRenameRemote(remote: RemoteInfo) {
+  showDialog(
+    {
+      title: "重命名远程",
+      description: `修改远程 ${remote.name} 的名称，远程分支引用会一并更新。`,
+      confirmLabel: "重命名",
+      fields: [
+        {
+          kind: "text",
+          key: "name",
+          label: "新远程名",
+          value: remote.name,
+          required: true,
+          mono: true,
+        },
+      ],
+    },
+    async (values) => {
+      const name = textValue(values, "name");
+      if (name === remote.name) return;
+      await runOperation("正在重命名远程…", () =>
+        renameGitRemote(remote.name, name),
+      );
+    },
+  );
+}
+
+function openRemoveRemote(remote: RemoteInfo) {
+  showDialog(
+    {
+      title: "移除远程仓库",
+      description: `移除远程 ${remote.name}，本地分支不会被删除。`,
+      confirmLabel: "移除远程",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          text: `remote.${remote.name} 的配置和 ${remote.name}/… 远程分支引用会被删除。如果只是暂时断开，可以保留远程。`,
+          danger: true,
+        },
+      ],
+    },
+    async () => {
+      await runOperation("正在移除远程…", () => removeGitRemote(remote.name));
+    },
+  );
 }
 
 async function handleBranchAction(id: string, branch: BranchInfo) {
@@ -1075,6 +2134,39 @@ function openCherryPick(oid: string, short: string, target: string | null) {
   );
 }
 
+function openCherryPickSelection() {
+  const target = currentBranch.value;
+  const commits = selectedRowsOldestFirst.value;
+  if (!commits.length) return;
+  if (!target) {
+    setNotice({ tone: "error", message: "当前不在任何本地分支上，无法拣选提交。" });
+    return;
+  }
+  const names = commits.map((row) => row.shortId).join("、");
+  showDialog(
+    {
+      title: `拣选 ${commits.length} 个提交`,
+      description: `按从旧到新的顺序，把 ${names} 依次拣选到 ${target.name}。`,
+      confirmLabel: "开始拣选",
+      fields: [
+        {
+          kind: "note",
+          key: "order",
+          text: "提交会按历史顺序应用。如果中途发生冲突，可以在图谱顶部继续或中止这次拣选。",
+        },
+      ],
+    },
+    async () => {
+      await runOperation(`正在拣选 ${commits.length} 个提交…`, () =>
+        cherryPickCommits(
+          commits.map((row) => row.oid),
+          target.name,
+        ),
+      );
+    },
+  );
+}
+
 function openRevert(oid: string, short: string) {
   showDialog(
     {
@@ -1265,130 +2357,16 @@ function openCheckoutCommit(oid: string, short: string) {
   );
 }
 
-function openDropBranch(source: BranchInfo, target: BranchInfo) {
-  if (source.kind === "remote") {
-    showDialog(
-      {
-        title: "合并远程分支",
-        description: `将 ${source.name} 合并到 ${target.name}。`,
-        confirmLabel: "开始合并",
-        fields: [
-          {
-            kind: "note",
-            key: "note",
-            text: "远程分支不能被移动，这里只会把它的提交合并到本地目标分支。",
-          },
-        ],
-      },
-      async () => {
-        await runOperation("正在合并分支…", () =>
-          mergeGitBranches(source.name, target.name, false),
-        );
-      },
-    );
-    return;
-  }
-  showDialog(
-    {
-      title: "连接两个分支",
-      description: `选择如何把 ${source.name} 放到 ${target.name} 上。`,
-      confirmLabel: "继续",
-      fields: [
-        {
-          kind: "radio",
-          key: "action",
-          label: "操作",
-          value: "merge",
-          options: [
-            {
-              value: "merge",
-              label: `将 ${source.name} 合并到 ${target.name}`,
-              help: "保留两条历史。会切换到目标分支后执行。",
-            },
-            {
-              value: "rebase",
-              label: `将 ${source.name} 变基到 ${target.name}`,
-              help: "把来源分支的提交重放到目标之上。会切换到来源分支。",
-            },
-          ],
-        },
-        {
-          kind: "note",
-          key: "note",
-          text: "工作区有未提交改动时，Git 可能会拒绝执行。",
-        },
-      ],
-    },
-    async (values) => {
-      if (textValue(values, "action") === "rebase") {
-        await runOperation("正在变基…", () =>
-          rebaseGitBranch(source.name, target.name),
-        );
-      } else {
-        await runOperation("正在合并分支…", () =>
-          mergeGitBranches(source.name, target.name, false),
-        );
-      }
-    },
-  );
-}
-
-function openDropBranchCommit(branch: BranchInfo, oid: string, short: string) {
-  const isCurrent = branch.isCurrent;
-  showDialog(
-    {
-      title: "把分支放到提交上",
-      description: `让 ${branch.name} 指向或基于提交 ${short}。`,
-      confirmLabel: "继续",
-      fields: [
-        {
-          kind: "radio",
-          key: "action",
-          label: "操作",
-          value: "reset",
-          options: [
-            {
-              value: "reset",
-              label: `将 ${branch.name} 重置到 ${short}`,
-              help: isCurrent
-                ? "当前分支会被移动，按下面选择的方式处理改动。"
-                : "只移动分支引用，不影响当前工作区。",
-            },
-            {
-              value: "rebase",
-              label: `将 ${branch.name} 变基到 ${short}`,
-              help: "把分支上的提交重放到这个提交之上，历史会改写。",
-            },
-          ],
-        },
-        {
-          kind: "select",
-          key: "mode",
-          label: "重置方式",
-          value: isCurrent ? "mixed" : "hard",
-          options: isCurrent
-            ? [
-                { value: "soft", label: "软重置 · 改动进入暂存区" },
-                { value: "mixed", label: "混合重置 · 改动留在工作区" },
-                { value: "hard", label: "硬重置 · 丢弃改动" },
-              ]
-            : [{ value: "hard", label: "移动分支引用" }],
-          help: "仅在选择重置时使用。",
-        },
-      ],
-    },
-    async (values) => {
-      if (textValue(values, "action") === "rebase") {
-        await runOperation("正在变基…", () => rebaseGitBranch(branch.name, oid));
-      } else {
-        const mode = (textValue(values, "mode") || "hard") as ResetMode;
-        await runOperation("正在重置分支…", () => resetGitBranch(branch.name, oid, mode));
-      }
-    },
-  );
+function serverBranchName(branch: BranchInfo): string {
+  if (branch.kind === "local") return branch.name;
+  const remote = (refs.value?.remotes ?? [])
+    .filter((name) => branch.name.startsWith(`${name}/`))
+    .sort((a, b) => b.length - a.length)[0];
+  return remote ? branch.name.slice(remote.length + 1) : branch.name;
 }
 
 async function checkoutTo(branch: BranchInfo) {
+  if (branch.isCurrent || operation.value) return;
   const ok = await runOperation(`正在切换到 ${branch.name}…`, () =>
     checkoutGitBranch(branch.name, branch.kind),
   );
@@ -1402,6 +2380,10 @@ async function checkoutTo(branch: BranchInfo) {
 function fetchAll() {
   if (operation.value) return;
   void runOperation("正在获取远程更新…", () => fetchGitRemote(null));
+}
+
+async function refreshAll() {
+  await Promise.all([refreshRepo(), refreshWorkspace()]);
 }
 
 function openPushCurrent() {
@@ -1430,11 +2412,6 @@ function stateKindLabel(kind: OperationKind): string {
   return { merge: "合并", rebase: "变基", "cherry-pick": "拣选", revert: "还原" }[kind];
 }
 
-const panelTabs: { key: PanelMode; label: string }[] = [
-  { key: "graph", label: "图谱" },
-  { key: "changes", label: "变更" },
-];
-
 const selectedFile = computed<WorkingFile | null>(() => {
   const key = selectedFileKey.value;
   if (!key) return null;
@@ -1445,27 +2422,52 @@ const selectedFile = computed<WorkingFile | null>(() => {
   );
 });
 
-const workspaceChanges = computed(() => changeCount.value);
-
-async function setPanel(mode: PanelMode) {
-  if (mode === panelMode.value) return;
-  if (mode === "changes") {
-    await enterChanges();
-    return;
-  }
-  panelMode.value = "graph";
-}
-
 watch(
   () => session.value?.path ?? "",
   (next, previous) => {
-    if (next !== previous) resetWorkspace();
+    if (next === previous) return;
+    resetWorkspace();
+    selectedStash.value = null;
+    anchorOid.value = null;
+    filterQuery.value = "";
+    resetCenter();
+    if (next) void enterWorkspace();
+  },
+  { immediate: true },
+);
+
+let workspaceTimer: number | undefined;
+
+watch(
+  () => {
+    const value = status.value;
+    if (!value) return "";
+    return [
+      value.branch,
+      value.staged,
+      value.unstaged,
+      value.untracked,
+      value.conflicted,
+      value.state,
+    ].join(":");
+  },
+  (next, previous) => {
+    if (!session.value || next === previous) return;
+    if (workspaceTimer !== undefined) window.clearTimeout(workspaceTimer);
+    workspaceTimer = window.setTimeout(() => {
+      workspaceTimer = undefined;
+      if (session.value) void refreshWorkspace();
+    }, 180);
   },
 );
 
-function onWorkingToggle(file: WorkingFile) {
-  void toggleFile(file);
-}
+watch(selectedFileKey, (key) => {
+  if (!key && centerMode.value === "working") resetCenter();
+});
+
+onBeforeUnmount(() => {
+  if (workspaceTimer !== undefined) window.clearTimeout(workspaceTimer);
+});
 
 function openDiscard(file: WorkingFile) {
   const untracked = file.stage === "untracked";
@@ -1537,17 +2539,22 @@ function openStashDrop(entry: StashEntry) {
       ],
     },
     async () => {
-      await removeStash(entry);
+      const removed = await removeStash(entry);
+      if (removed && selectedStash.value?.reference === entry.reference) {
+        selectedStash.value = null;
+      }
     },
   );
 }
 
-function onStashApply(entry: StashEntry) {
-  void applyStash(entry, false);
+async function onStashApply(entry: StashEntry) {
+  const ok = await applyStash(entry, false);
+  if (ok && selectedStash.value?.reference === entry.reference) selectedStash.value = null;
 }
 
-function onStashPop(entry: StashEntry) {
-  void applyStash(entry, true);
+async function onStashPop(entry: StashEntry) {
+  const ok = await applyStash(entry, true);
+  if (ok && selectedStash.value?.reference === entry.reference) selectedStash.value = null;
 }
 
 function onHunkApply(index: number) {
@@ -1591,20 +2598,6 @@ function onWorkingToggleSelected() {
           </p>
         </div>
         <div class="workspace-actions">
-          <div class="segmented panel-switch" role="tablist" aria-label="工作区视图">
-            <button
-              v-for="tab in panelTabs"
-              :key="tab.key"
-              type="button"
-              class="segment"
-              role="tab"
-              :aria-selected="panelMode === tab.key"
-              :class="{ active: panelMode === tab.key }"
-              @click="setPanel(tab.key)"
-            >
-              {{ tab.label }}<span v-if="tab.key === 'changes' && workspaceChanges"> {{ workspaceChanges }}</span>
-            </button>
-          </div>
           <span v-if="operation" class="op-pill" aria-live="polite">
             <span class="loading-orbit" aria-hidden="true"></span>
             {{ operation }}
@@ -1623,44 +2616,44 @@ function onWorkingToggleSelected() {
           <div class="sync-cluster" role="group" aria-label="远程同步">
             <button
               type="button"
-              class="icon-button sync-button"
+              class="sync-button"
               title="获取所有远程更新"
-              aria-label="获取所有远程更新"
               :disabled="!!operation || loading"
               @click="fetchAll"
             >
-              <Icon name="refresh" :size="15" />
+              <Icon name="refresh" :size="14" />
+              获取
             </button>
             <button
               type="button"
-              class="icon-button sync-button"
+              class="sync-button"
               title="拉取当前分支"
-              aria-label="拉取当前分支"
               :disabled="!!operation || loading || !currentBranch"
               @click="openPullCurrent"
             >
-              <Icon name="download" :size="15" />
+              <Icon name="download" :size="14" />
+              拉取
             </button>
             <button
               type="button"
-              class="icon-button sync-button"
+              class="sync-button"
               title="推送分支"
-              aria-label="推送分支"
               :disabled="!!operation || loading || !currentBranch"
               @click="openPushCurrent"
             >
-              <Icon name="upload" :size="15" />
+              <Icon name="upload" :size="14" />
+              推送
             </button>
           </div>
           <button type="button" class="button ghost small rail-toggle" @click="railOpen = true">
-            <Icon :name="panelMode === 'changes' ? 'file' : 'branch'" :size="15" />
-            {{ panelMode === "changes" ? "变更" : "分支" }}
+            <Icon name="branch" :size="15" />
+            分支
           </button>
           <button
             type="button"
             class="button ghost small"
             :disabled="loading || !!operation"
-            @click="refreshRepo"
+            @click="refreshAll"
           >
             <Icon name="refresh" :size="15" />
             {{ loading ? "刷新中…" : "刷新" }}
@@ -1712,85 +2705,200 @@ function onWorkingToggleSelected() {
               中止
             </button>
           </template>
-          <button type="button" class="icon-button notice-close" title="关闭提示" @click="clearNotice">
-            <Icon name="close" :size="15" />
+          <button type="button" class="button ghost tiny notice-close" title="关闭提示" @click="clearNotice">
+            <Icon name="close" :size="13" />
+            关闭
           </button>
         </div>
       </div>
 
       <div class="graph-layout">
         <div v-if="railOpen" class="rail-scrim" @click="railOpen = false"></div>
-        <WorkspaceRail
-          v-show="panelMode === 'changes'"
-          :files="workingFiles"
-          :stashes="stashes"
-          :selected="selectedFileKey"
-          :truncated="filesTruncated"
-          :loading="workspaceLoading"
-          :disabled="!!operation"
-          :class="{ 'rail-open': railOpen && panelMode === 'changes' }"
-          @select="selectFile"
-          @toggle="onWorkingToggle"
-          @discard="openDiscard"
-          @stage-all="stageEverything"
-          @unstage-all="unstageEverything"
-          @stash-new="openStash"
-          @stash-apply="onStashApply"
-          @stash-pop="onStashPop"
-          @stash-drop="openStashDrop"
-          @refresh="refreshWorkspace"
-          @close="railOpen = false"
-        />
         <BranchRail
-          v-show="panelMode === 'graph'"
           :refs="refs"
           :selected="
             selectedBranch
               ? { name: selectedBranch.name, kind: selectedBranch.kind }
               : null
           "
+          :stashes="stashes"
+          :selected-stash="selectedStash?.reference ?? null"
+          :remotes="remotes"
           :disabled="!!operation"
-          :class="{ 'rail-open': railOpen && panelMode === 'graph' }"
+          :drag-kind="
+            dragSource
+              ? dragSource.type === 'commit'
+                ? 'commit'
+                : dragSource.branch.kind
+              : null
+          "
+          :class="{ 'rail-open': railOpen }"
           @select-branch="focusBranch"
           @select-tag="focusTag"
+          @select-stash="focusStash"
+          @stash-new="openStash"
+          @stash-menu="openStashMenuFromRail"
+          @remote-add="openAddRemote"
+          @remote-menu="openRemoteMenu"
           @menu="openRailMenu"
           @create="openCreateBranch()"
           @fetch="fetchAll"
           @drag-start="onBranchDragStart"
+          @drag-over="onRailDragOver"
           @drag-end="resetDrag"
-          @drop-branch="handleBranchDrop"
+          @drop-branch="onRailBranchDrop"
+          @checkout-branch="checkoutTo"
           @close="railOpen = false"
         />
 
-        <section v-show="panelMode === 'graph'" class="surface commit-sheet" aria-label="提交图谱">
+        <section
+          v-if="centerMode === 'graph'"
+          class="surface commit-sheet"
+          :class="{ dragging: !!dragSource }"
+          aria-label="提交图谱"
+        >
           <div class="commit-head">
-            <span class="col-graph" :style="{ width: `${graphWidth + 8}px` }">图谱</span>
+            <span class="col-refs">分支 / 标签</span>
+            <span class="col-graph" :style="{ width: `${graphWidth}px` }">图谱</span>
             <span class="col-summary">提交</span>
             <span class="col-author">作者</span>
             <span class="col-date">时间</span>
+            <span class="col-sha">SHA</span>
           </div>
 
-          <div ref="scrollRef" class="commit-scroll">
+          <div class="commit-tools">
+            <label class="commit-filter">
+              <Icon name="search" :size="14" />
+              <input
+                v-model="filterQuery"
+                type="search"
+                placeholder="筛选提交：摘要、作者、哈希或分支"
+                aria-label="筛选提交"
+              />
+              <button
+                v-if="filterQuery"
+                type="button"
+                class="filter-clear"
+                title="清除筛选"
+                @click="filterQuery = ''"
+              >
+                <Icon name="close" :size="11" />
+                清除
+              </button>
+            </label>
+            <span v-if="isFiltering" class="filter-count">
+              {{ visibleMatches.length }} / {{ rows.length }}
+            </span>
+            <span v-else class="commit-tools-hint">Ctrl / Shift 点选多个提交</span>
+          </div>
+
+          <div v-if="selectedOids.length > 1" class="selection-bar" role="status">
+            <span class="selection-count">
+              已选 <strong>{{ selectedOids.length }}</strong> 个提交
+            </span>
+            <div class="selection-actions">
+              <button
+                type="button"
+                class="button ghost tiny"
+                :disabled="selectedOids.length !== 2"
+                :title="selectedOids.length === 2 ? '对比两个提交' : '选择恰好两个提交才能对比'"
+                @click="openCompare"
+              >
+                <Icon name="git-compare" :size="13" />
+                对比
+              </button>
+              <button
+                type="button"
+                class="button ghost tiny"
+                :disabled="!currentBranch"
+                @click="openCherryPickSelection"
+              >
+                <Icon name="git-merge" :size="13" />
+                拣选
+              </button>
+              <button type="button" class="button ghost tiny" @click="copySelectedHashes">
+                <Icon name="copy" :size="13" />
+                复制哈希
+              </button>
+              <button
+                type="button"
+                class="button ghost tiny"
+                title="清除多选"
+                @click="clearMultiSelection"
+              >
+                <Icon name="close" :size="12" />
+                清除选择
+              </button>
+            </div>
+          </div>
+
+          <div
+            class="wip-row"
+            :class="{ selected: wipSelected }"
+            role="button"
+            tabindex="0"
+            :aria-pressed="wipSelected"
+            title="查看工作区变更并提交"
+            @click="focusWip"
+            @keydown.enter.self.prevent="focusWip"
+            @keydown.space.self.prevent="focusWip"
+          >
+            <span class="col-refs wip-refs" aria-hidden="true"></span>
+            <span
+              class="col-graph wip-graph"
+              :style="{ width: `${graphWidth}px` }"
+              aria-hidden="true"
+            >
+              <span class="wip-node" :style="{ left: `${wipNodeLeft}px` }"></span>
+            </span>
+            <span class="wip-main">
+              <span class="wip-badge">WIP</span>
+              <span class="wip-title">
+                {{ wipCount ? `${wipCount} 个文件待提交` : "工作区是干净的" }}
+              </span>
+              <span class="wip-branch">
+                <Icon name="branch" :size="12" />
+                {{ headLabel }}
+              </span>
+            </span>
+            <span class="wip-stats">
+              <span v-if="workspaceStats.additions" class="stat-add">
+                +{{ workspaceStats.additions }}
+              </span>
+              <span v-if="workspaceStats.deletions" class="stat-del">
+                −{{ workspaceStats.deletions }}
+              </span>
+              <span class="wip-cta">
+                查看变更
+                <Icon name="chevron-right" :size="11" />
+              </span>
+            </span>
+          </div>
+
+          <div ref="scrollRef" class="commit-scroll" @dragover="onScrollDragOver">
             <div class="commit-rows">
               <canvas ref="canvasRef" class="graph-canvas"></canvas>
               <div
-                v-for="row in rows"
+                v-for="row in visibleRows"
                 :key="row.oid"
                 class="commit-row"
                 :class="{
-                  selected: selectedOid === row.oid,
+                  selected: selectedOids.includes(row.oid),
+                  'primary-selected': selectedOid === row.oid,
                   'drop-target': dropTarget === `commit:${row.oid}`,
+                  'drag-source': isRowDragSource(row),
                 }"
-                :style="{ paddingLeft: `${graphWidth + 24}px` }"
                 :title="row.summary"
                 :data-oid="row.oid"
                 :draggable="!operation"
                 role="button"
                 tabindex="0"
-                :aria-pressed="selectedOid === row.oid"
-                @click="onSelect(row)"
-                @keydown.enter.self.prevent="onSelect(row)"
-                @keydown.space.self.prevent="onSelect(row)"
+                :aria-pressed="selectedOids.includes(row.oid)"
+                @click="onRowClick($event, row)"
+                @keydown.enter.self.prevent="selectSingle(row)"
+                @keydown.space.self.prevent="selectSingle(row)"
+                @mouseenter="hoverOid = row.oid"
+                @mouseleave="hoverOid = hoverOid === row.oid ? null : hoverOid"
                 @contextmenu="onRowContext($event, row)"
                 @dragstart="onRowDragStart($event, row)"
                 @dragend="resetDrag"
@@ -1798,57 +2906,100 @@ function onWorkingToggleSelected() {
                 @dragleave="onRowDragLeave($event, row)"
                 @drop="onRowDrop($event, row)"
               >
-                <span class="col-summary">
-                  <span class="commit-summary">{{ row.summary }}</span>
-                  <span class="refs">
-                    <button
-                      v-for="label in visibleRefs(row)"
-                      :key="`${label.kind}-${label.name}`"
-                      type="button"
-                      class="ref"
-                      :class="[
-                        `ref-${label.kind}`,
-                        {
-                          'drop-target':
-                            label.kind !== 'tag' &&
-                            label.kind !== 'head' &&
-                            dropTarget === `branch:${label.kind}:${label.name}`,
-                        },
-                      ]"
-                      :title="label.name"
-                      :draggable="
-                        !operation && (label.kind === 'branch' || label.kind === 'remote')
-                      "
-                      @click.stop="onRefClick(row, label)"
-                      @keydown.stop
-                      @contextmenu="onRefContext($event, label)"
-                      @dragstart="refDragStart($event, label)"
-                      @dragend.stop="resetDrag"
-                      @dragover="refDragOver($event, label)"
-                      @drop="onRefDrop($event, label)"
-                    >
-                      {{ label.name }}
-                    </button>
+                <span class="col-refs">
+                  <span v-if="rowRefStack(row).length" class="row-refs" aria-label="分支与标签">
                     <span
-                      v-if="extraRefs(row)"
-                      class="ref ref-more"
-                      :title="extraRefNames(row)"
+                      v-for="line in rowRefStack(row)"
+                      :key="line.key"
+                      class="row-ref-line"
+                      :data-line="line.key"
                     >
-                      +{{ extraRefs(row) }}
+                      <button
+                        v-for="label in line.labels"
+                        :key="`${label.kind}-${label.name}`"
+                        type="button"
+                        class="ref"
+                        :class="[
+                          `ref-${label.kind}`,
+                          {
+                            'drop-target': isRefDropTarget(label),
+                            'drag-source': isDragSource(label),
+                          },
+                        ]"
+                        :title="refTitle(label)"
+                        :draggable="
+                          !operation && (label.kind === 'branch' || label.kind === 'remote')
+                        "
+                        @click.stop="onRefClick(row, label)"
+                        @dblclick.stop="onRefDoubleClick(label)"
+                        @keydown.stop
+                        @contextmenu="onRefContext($event, label)"
+                        @dragstart="refDragStart($event, label)"
+                        @dragend.stop="resetDrag"
+                        @dragover="refDragOver($event, label)"
+                        @dragleave="refDragLeave($event, label)"
+                        @drop="onRefDrop($event, label)"
+                      >
+                        <Icon
+                          v-if="label.kind === 'tag'"
+                          name="tag"
+                          :size="9"
+                          class="ref-icon"
+                        />
+                        <Icon
+                          v-else-if="label.kind === 'remote'"
+                          name="cloud"
+                          :size="9"
+                          class="ref-icon"
+                        />
+                        <Icon
+                          v-else-if="label.kind === 'head' || isCurrentRef(label)"
+                          name="check"
+                          :size="9"
+                          class="ref-icon ref-current"
+                        />
+                        <Icon
+                          v-else
+                          name="branch"
+                          :size="9"
+                          class="ref-icon ref-icon-lane"
+                          :style="{ color: rowColor(row) }"
+                        />
+                        <span class="ref-name">{{ label.name }}</span>
+                      </button>
+                      <span v-if="line.hidden" class="ref ref-more" :title="line.hiddenNames">
+                        +{{ line.hidden }}
+                      </span>
                     </span>
                   </span>
+                </span>
+                <span
+                  class="col-graph"
+                  :style="{ width: `${graphWidth}px` }"
+                  aria-hidden="true"
+                ></span>
+                <span class="col-summary">
+                  <span class="commit-summary">{{ row.summary }}</span>
                 </span>
                 <span class="col-author" :title="row.authorName">{{ row.authorName }}</span>
                 <span class="col-date" :title="formatDateTime(row.authoredAt)">
                   {{ formatRelative(row.authoredAt) }}
                 </span>
+                <span class="col-sha" :title="row.oid">{{ row.shortId }}</span>
               </div>
 
-              <div v-if="!rows.length && !loading" class="commit-empty">
+              <div v-if="!visibleRows.length && isFiltering" class="commit-empty">
+                <span class="empty-line" aria-hidden="true"></span>
+                没有匹配「{{ filterQuery.trim() }}」的提交
+                <button type="button" class="button ghost tiny" @click="filterQuery = ''">
+                  清除筛选
+                </button>
+              </div>
+              <div v-else-if="!visibleRows.length && !loading" class="commit-empty">
                 <span class="empty-line" aria-hidden="true"></span>
                 这个仓库还没有任何提交
               </div>
-              <div v-else-if="!rows.length && loading" class="commit-empty">
+              <div v-else-if="!visibleRows.length && loading" class="commit-empty">
                 正在读取提交历史…
               </div>
             </div>
@@ -1860,42 +3011,216 @@ function onWorkingToggleSelected() {
             </div>
           </div>
 
-          <div v-if="dragSource" class="drag-hint" aria-hidden="true">
+          <div
+            v-if="dragSource"
+            class="drag-hint"
+            :class="{ active: !!dropLabel }"
+            aria-hidden="true"
+          >
             <Icon
               :name="dragSource.type === 'branch' ? 'git-merge' : 'commit'"
               :size="14"
             />
-            <template v-if="dragSource.type === 'branch'">
-              把 {{ dragSource.branch.name }} 放到分支上合并 / 变基，放到提交上重置 / 变基
-            </template>
-            <template v-else>
-              把提交 {{ dragSource.shortId }} 放到本地分支上拣选
-            </template>
+            {{ dragHint }}
           </div>
         </section>
 
         <WorkingDiff
-          v-show="panelMode === 'changes'"
+          v-else-if="centerMode === 'working'"
           :diff="fileDiff"
           :file="selectedFile"
           :loading="diffLoading"
           :disabled="!!operation"
+          back-label="图谱"
           @apply-hunk="onHunkApply"
           @toggle-file="onWorkingToggleSelected"
           @discard="onWorkingDiscard"
+          @back="resetCenter"
+        />
+
+        <CommitDiffView
+          v-else-if="centerMode === 'commit'"
+          :diff="commitDiff"
+          :title="commitDiffTitle"
+          :subtitle="commitDiffSubtitle"
+          :only-path="commitFilePath"
+          :loading="commitDiffLoading"
+          :empty-text="commitFilePath ? '这个文件没有可展示的差异' : '这个提交没有文本差异'"
+          back-label="图谱"
+          @back="resetCenter"
+        >
+          <template #actions>
+            <button
+              v-if="commitFilePath"
+              type="button"
+              class="button ghost tiny"
+              @click="commitFilePath = null"
+            >
+              <Icon name="file" :size="13" />
+              全部文件
+            </button>
+          </template>
+        </CommitDiffView>
+
+        <CommitDiffView
+          v-else
+          :diff="compareDiff"
+          :title="compareTitle"
+          :subtitle="compareSubtitle"
+          :loading="compareLoading"
+          empty-text="两个提交之间没有文本差异"
+          back-label="图谱"
+          @back="resetCenter"
         />
 
         <aside
-          v-if="panelMode === 'changes'"
-          class="surface inspector composer-pane"
-          aria-label="提交"
+          v-if="wipSelected"
+          class="surface inspector wip-dossier"
+          aria-label="工作区变更与提交"
         >
-          <CommitComposer
-            :branch="headLabel"
-            :can-push="(refs?.remotes.length ?? 0) > 0"
-            :disabled="!!operation || !!dialog"
-            @push="openPushCurrent"
-          />
+          <div class="wip-dossier-changes">
+            <ChangesPanel
+              :files="workingFiles"
+              :selected="selectedFileKey"
+              :truncated="filesTruncated"
+              :loading="workspaceLoading"
+              :disabled="!!operation"
+              @select="openWorkingFile"
+              @stage-files="onStageFiles"
+              @unstage-files="onUnstageFiles"
+              @discard-files="openDiscardMany"
+              @stash="openStash"
+              @refresh="refreshWorkspace"
+            />
+          </div>
+          <div class="wip-dossier-composer">
+            <CommitComposer
+              :branch="headLabel"
+              :can-push="(refs?.remotes.length ?? 0) > 0"
+              :disabled="!!operation || !!dialog"
+              @push="openPushCurrent"
+            />
+          </div>
+        </aside>
+
+        <aside v-else-if="selectedStash" class="surface inspector" aria-label="贮藏详情">
+          <div class="inspector-head">
+            <span class="section-label">贮藏详情</span>
+            <button
+              type="button"
+              class="button ghost tiny"
+              @click="copyText(selectedStash.reference, `已复制 ${selectedStash.reference}`)"
+            >
+              <Icon name="copy" :size="14" />
+              复制引用
+            </button>
+          </div>
+          <div class="inspector-body">
+            <div class="branch-identity">
+              <span class="branch-emblem" aria-hidden="true">
+                <Icon name="stash" :size="17" />
+              </span>
+              <div class="branch-identity-copy">
+                <span class="branch-kind">贮藏</span>
+                <h3>{{ selectedStash.message }}</h3>
+              </div>
+            </div>
+
+            <dl class="branch-meta">
+              <div>
+                <dt>引用</dt>
+                <dd>{{ selectedStash.reference }}</dd>
+              </div>
+              <div>
+                <dt>时间</dt>
+                <dd>{{ formatIsoDate(selectedStash.date) }}</dd>
+              </div>
+            </dl>
+
+            <div class="branch-actions">
+              <button
+                type="button"
+                class="button primary small"
+                :disabled="!!operation"
+                @click="onStashApply(selectedStash)"
+              >
+                <Icon name="download" :size="14" />
+                应用
+              </button>
+              <button
+                type="button"
+                class="button ghost small"
+                :disabled="!!operation"
+                @click="onStashPop(selectedStash)"
+              >
+                <Icon name="upload" :size="14" />
+                弹出
+              </button>
+              <button
+                type="button"
+                class="button ghost small danger-text"
+                :disabled="!!operation"
+                @click="openStashDrop(selectedStash)"
+              >
+                <Icon name="trash" :size="14" />
+                删除
+              </button>
+            </div>
+
+            <p class="rail-hint">
+              <Icon name="stash" :size="13" />
+              应用会把贮藏内容放回工作区；弹出在应用成功后会删除这条贮藏。
+            </p>
+          </div>
+        </aside>
+
+        <aside v-else-if="selectedOids.length > 1" class="surface inspector" aria-label="多选提交">
+          <div class="inspector-head">
+            <span class="section-label">已选择 {{ selectedOids.length }} 个提交</span>
+            <button type="button" class="button ghost tiny" @click="copySelectedHashes">
+              <Icon name="copy" :size="14" />
+              复制哈希
+            </button>
+          </div>
+          <div class="inspector-body">
+            <p class="multi-hint">
+              选两个提交可以查看它们之间的差异；也可以把这一串提交按从旧到新的顺序拣选到当前分支。
+            </p>
+
+            <div class="multi-actions">
+              <button
+                type="button"
+                class="button primary small"
+                :disabled="selectedOids.length !== 2"
+                @click="openCompare"
+              >
+                <Icon name="git-compare" :size="14" />
+                对比所选
+              </button>
+              <button
+                type="button"
+                class="button ghost small"
+                :disabled="!currentBranch"
+                @click="openCherryPickSelection"
+              >
+                <Icon name="git-merge" :size="14" />
+                拣选到 {{ currentBranch?.name ?? "当前 HEAD" }}
+              </button>
+            </div>
+
+            <div class="multi-list">
+              <button
+                v-for="row in selectedRows"
+                :key="row.oid"
+                type="button"
+                class="multi-row"
+                @click="selectSingle(row)"
+              >
+                <span class="multi-hash">{{ row.shortId }}</span>
+                <span class="multi-summary">{{ row.summary }}</span>
+              </button>
+            </div>
+          </div>
         </aside>
 
         <aside v-else class="surface inspector" aria-label="详情">
@@ -2018,16 +3343,23 @@ function onWorkingToggleSelected() {
               </div>
               <pre v-if="detail.message.trim()" class="commit-message">{{ detail.message }}</pre>
               <div class="file-list">
-                <div v-for="file in detail.files" :key="file.path" class="file-row">
+                <button
+                  v-for="file in detail.files"
+                  :key="file.path"
+                  type="button"
+                  class="file-row file-row-button"
+                  :title="`查看 ${file.path} 的差异`"
+                  @click="openCommitDiff(file.path)"
+                >
                   <span class="file-status" :class="`status-${file.status}`">
                     {{ statusText(file.status) }}
                   </span>
-                  <span class="file-path" :title="file.path">{{ file.path }}</span>
+                  <span class="file-path">{{ file.path }}</span>
                   <span class="file-stats">
                     <span class="stat-add">+{{ file.additions }}</span>
                     <span class="stat-del">−{{ file.deletions }}</span>
                   </span>
-                </div>
+                </button>
                 <div v-if="!detail.files.length" class="file-empty">没有文件变更</div>
               </div>
             </template>
@@ -2090,6 +3422,15 @@ function onWorkingToggleSelected() {
                 type="button"
                 class="button ghost small"
                 :disabled="!!operation"
+                @click="onReuseMessage(detail.oid)"
+              >
+                <Icon name="message" :size="14" />
+                复用信息
+              </button>
+              <button
+                type="button"
+                class="button ghost small"
+                :disabled="!!operation"
                 @click="openCommitMenuFromButton($event)"
               >
                 更多
@@ -2119,16 +3460,23 @@ function onWorkingToggleSelected() {
               <span class="section-label">变更文件</span>
             </div>
             <div class="file-list">
-              <div v-for="file in detail.files" :key="file.path" class="file-row">
+              <button
+                v-for="file in detail.files"
+                :key="file.path"
+                type="button"
+                class="file-row file-row-button"
+                :title="`查看 ${file.path} 的差异`"
+                @click="openCommitDiff(file.path)"
+              >
                 <span class="file-status" :class="`status-${file.status}`">
                   {{ statusText(file.status) }}
                 </span>
-                <span class="file-path" :title="file.path">{{ file.path }}</span>
+                <span class="file-path">{{ file.path }}</span>
                 <span class="file-stats">
                   <span class="stat-add">+{{ file.additions }}</span>
                   <span class="stat-del">−{{ file.deletions }}</span>
                 </span>
-              </div>
+              </button>
               <div v-if="!detail.files.length" class="file-empty">没有文件变更</div>
             </div>
           </div>
@@ -2143,6 +3491,15 @@ function onWorkingToggleSelected() {
       :items="menu.items"
       @close="menu = null"
       @select="onMenuSelect"
+    />
+    <CanvasMenu
+      v-if="dropMenu"
+      :x="dropMenu.x"
+      :y="dropMenu.y"
+      :heading="dropMenu.heading"
+      :items="dropMenu.items"
+      @close="dropMenu = null"
+      @select="onDropMenuSelect"
     />
     <ActionDialog
       v-if="dialog"

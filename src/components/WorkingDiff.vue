@@ -7,12 +7,14 @@ defineProps<{
   file: WorkingFile | null;
   loading?: boolean;
   disabled?: boolean;
+  backLabel?: string;
 }>();
 
-const emit = defineEmits<{
+defineEmits<{
   (e: "apply-hunk", index: number): void;
   (e: "toggle-file"): void;
   (e: "discard"): void;
+  (e: "back"): void;
 }>();
 
 const STAGE_LABEL: Record<string, string> = {
@@ -51,6 +53,12 @@ function toggleLabel(kind: string): string {
 
 <template>
   <section class="surface diff-sheet" aria-label="文件差异">
+    <div v-if="backLabel" class="diff-backbar">
+      <button type="button" class="button ghost tiny" @click="$emit('back')">
+        <Icon name="arrow-left" :size="13" />
+        返回{{ backLabel }}
+      </button>
+    </div>
     <div v-if="!file && !loading" class="diff-empty">
       <div class="inspector-mark" aria-hidden="true">
         <Icon name="file" :size="26" />
@@ -137,12 +145,10 @@ function toggleLabel(kind: string): string {
                       : '只暂存这个代码块'
                     : '这个文件不支持按代码块暂存，请整文件暂存'
                 "
-                :aria-label="
-                  diff.stage === 'staged' ? '取消暂存这个代码块' : '暂存这个代码块'
-                "
                 @click="$emit('apply-hunk', hunk.index)"
               >
-                <Icon :name="diff.stage === 'staged' ? 'minus' : 'plus'" :size="13" />
+                <Icon :name="diff.stage === 'staged' ? 'minus' : 'plus'" :size="12" />
+                {{ diff.stage === "staged" ? "取消本块" : "暂存本块" }}
               </button>
             </div>
             <pre class="diff-pre"><span

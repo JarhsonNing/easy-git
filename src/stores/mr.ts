@@ -55,6 +55,23 @@ export const branches = ref<GitLabBranch[]>([]);
 export const branchesLoading = ref(false);
 export const branchesError = ref("");
 
+export interface CreateRequest {
+  source: string;
+  target: string;
+}
+
+const pendingCreateRequest = ref<CreateRequest | null>(null);
+
+export function requestCreateMergeRequest(source: string, target: string): void {
+  pendingCreateRequest.value = { source, target };
+}
+
+export function consumeCreateRequest(): CreateRequest | null {
+  const request = pendingCreateRequest.value;
+  pendingCreateRequest.value = null;
+  return request;
+}
+
 let prepareToken = 0;
 let listToken = 0;
 let detailToken = 0;

@@ -30,8 +30,8 @@ One focused desktop workspace that combines a visual commit graph, self-hosted G
 
 ## Capabilities and Constraints
 
-- Visual commit graph with branch topology, refs, paging, and per-commit file/stat detail.
-- Commit workspace on the same three columns: per-file and per-hunk staging, whole-file and bulk stage/unstage, discard with confirmation, stash push/apply/pop/drop, commit with amend, commit-and-push, and AI-drafted commit messages.
+- Visual commit graph with branch topology, refs, paging, per-commit file/stat detail, full or per-file commit diffs, and two-commit comparison.
+- Commit workspace laid out graph-first: an always-visible refs rail with stashes and remote management (add, rename, set fetch/push URL, fetch, prune, remove), a pinned WIP row, commit filtering/search, multi-commit selection with compare and batch cherry-pick, and a right-hand dossier that switches between working changes, ref/stash/commit detail, and multi-selection. Working changes support both a flat path list and a recursive folder tree, with per-file and per-folder tri-state selection, per-file and per-hunk staging, whole-file and bulk stage/unstage, discard with confirmation, stash push/apply/pop/drop, amend, commit-and-push, AI-drafted commit messages, and one-click reuse of a historical message.
 - GitLab merge request integration: instance selection, filters, search, detail, file diffs, comments, create, merge (with squash/remove-source options), close, reopen, and open in GitLab.
 - AI assistant with streaming output, repository/worktree/selected-commit context, quick actions, and stop control.
 - Self-hosted GitLab must be supported.

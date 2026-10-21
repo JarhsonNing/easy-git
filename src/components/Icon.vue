@@ -26,6 +26,16 @@ const paths: Record<string, string[]> = {
   "arrow-up-right": ["M7 17 17 7", "M8 7h9v9"],
   close: ["M6 6l12 12", "M18 6 6 18"],
   "chevron-down": ["m6 9 6 6 6-6"],
+  "chevron-right": ["m9 18 6-6-6-6"],
+  list: ["M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01", "M3 12h.01", "M3 18h.01"],
+  tree: ["M6 3v12", "M6 9h6a3 3 0 0 1 3 3v9", "M6 15h9", "M6 21h.01", "M18 15h.01"],
+  "git-compare": [
+    "M6 3v12",
+    "M18 9a9 9 0 0 1-9 9",
+    "M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    "M18 6a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    "m18 12 3-3-3-3",
+  ],
   branch: [
     "M6 3v12",
     "M18 9a9 9 0 0 1-9 9",

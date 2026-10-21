@@ -5,7 +5,7 @@ use std::process::{Command, Output, Stdio};
 use tauri::State;
 
 use super::repo::{
-    lock_ops, read_refs, read_status, workdir, OperationResult, RepoStatus, RepoStore,
+    OperationResult, RepoStatus, RepoStore, lock_ops, read_refs, read_status, workdir,
 };
 
 pub(crate) const OUTPUT_LIMIT: usize = 6_000;
@@ -68,9 +68,7 @@ fn clip_output(raw: &str) -> String {
 
 fn not_found_hint(error: &std::io::Error) -> String {
     match error.kind() {
-        ErrorKind::NotFound => {
-            "未找到 Git 命令，请先安装 Git 并确保它在系统 PATH 中。".to_string()
-        }
+        ErrorKind::NotFound => "未找到 Git 命令，请先安装 Git 并确保它在系统 PATH 中。".to_string(),
         _ => format!("启动 Git 失败: {error}"),
     }
 }
@@ -222,14 +220,17 @@ fn resolve_commit(dir: &Path, spec: &str, label: &str) -> Result<String, String>
 fn ensure_local_branch(dir: &Path, name: &str) -> Result<(), String> {
     validate_branch_name(dir, name)?;
     let reference = format!("refs/heads/{name}");
-    let outcome = run_git(dir, &["rev-parse", "--verify", "--quiet", reference.as_str()])?;
+    let outcome = run_git(
+        dir,
+        &["rev-parse", "--verify", "--quiet", reference.as_str()],
+    )?;
     if !outcome.ok {
         return Err(format!("本地分支「{name}」不存在"));
     }
     Ok(())
 }
 
-fn ensure_remote(store: &RepoStore, remote: &str) -> Result<(), String> {
+pub(crate) fn ensure_remote(store: &RepoStore, remote: &str) -> Result<(), String> {
     reject_dash(remote, "远程名")?;
     let refs = read_refs(store)?;
     if !refs.remotes.iter().any(|name| name == remote) {
@@ -252,7 +253,10 @@ pub(crate) fn ensure_no_operation(store: &RepoStore) -> Result<RepoStatus, Strin
 fn state_label(state: &str) -> &'static str {
     match state {
         "merge" => "合并尚未完成",
-        "rebase" | "rebase-interactive" | "rebase-merge" | "apply-mailbox"
+        "rebase"
+        | "rebase-interactive"
+        | "rebase-merge"
+        | "apply-mailbox"
         | "apply-mailbox-or-rebase" => "变基尚未完成",
         "cherry-pick" | "cherry-pick-sequence" => "拣选尚未完成",
         "revert" | "revert-sequence" => "还原尚未完成",
@@ -302,10 +306,12 @@ pub fn checkout_branch(
     let dir = workdir(&store)?;
 
     if kind == "remote" {
-        validate_branch_name(&dir, &name)
-            .map_err(|_| format!("远程分支「{name}」名称异常"))?;
+        validate_branch_name(&dir, &name).map_err(|_| format!("远程分支「{name}」名称异常"))?;
         let reference = format!("refs/remotes/{name}");
-        let exists = run_git(&dir, &["rev-parse", "--verify", "--quiet", reference.as_str()])?;
+        let exists = run_git(
+            &dir,
+            &["rev-parse", "--verify", "--quiet", reference.as_str()],
+        )?;
         if !exists.ok {
             return Err(format!("远程分支「{name}」不存在"));
         }
@@ -316,13 +322,20 @@ pub fn checkout_branch(
             .ok_or_else(|| format!("无法从「{name}」推导本地分支名"))?;
         validate_branch_name(&dir, local)?;
         let local_reference = format!("refs/heads/{local}");
-        let local_exists =
-            run_git(&dir, &["rev-parse", "--verify", "--quiet", local_reference.as_str()])?;
+        let local_exists = run_git(
+            &dir,
+            &["rev-parse", "--verify", "--quiet", local_reference.as_str()],
+        )?;
         if local_exists.ok {
             return Err(format!("本地已存在分支「{local}」，请直接切换该分支"));
         }
         let outcome = run_git(&dir, &["checkout", "-b", local, "--track", name.as_str()])?;
-        finish(&store, outcome, format!("已基于 {name} 创建并切换到 {local}"), false)
+        finish(
+            &store,
+            outcome,
+            format!("已基于 {name} 创建并切换到 {local}"),
+            false,
+        )
     } else {
         ensure_local_branch(&dir, &name)?;
         let outcome = run_git(&dir, &["checkout", name.as_str()])?;
@@ -361,7 +374,12 @@ pub fn create_branch(
     let dir = workdir(&store)?;
     validate_branch_name(&dir, &name)?;
     let existing = format!("refs/heads/{name}");
-    if run_git(&dir, &["rev-parse", "--verify", "--quiet", existing.as_str()])?.ok {
+    if run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", existing.as_str()],
+    )?
+    .ok
+    {
         return Err(format!("分支「{name}」已存在"));
     }
     let start = match start_point.filter(|value| !value.trim().is_empty()) {
@@ -396,10 +414,18 @@ pub fn rename_branch(
         return Err("新分支名与原名相同".to_string());
     }
     let existing = format!("refs/heads/{new_name}");
-    if run_git(&dir, &["rev-parse", "--verify", "--quiet", existing.as_str()])?.ok {
+    if run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", existing.as_str()],
+    )?
+    .ok
+    {
         return Err(format!("分支「{new_name}」已存在"));
     }
-    let outcome = run_git(&dir, &["branch", "-m", old_name.as_str(), new_name.as_str()])?;
+    let outcome = run_git(
+        &dir,
+        &["branch", "-m", old_name.as_str(), new_name.as_str()],
+    )?;
     finish(
         &store,
         outcome,
@@ -514,10 +540,48 @@ pub fn cherry_pick(
 }
 
 #[tauri::command]
-pub fn revert_commit(
+pub fn cherry_pick_many(
     store: State<'_, RepoStore>,
-    oid: String,
+    oids: Vec<String>,
+    target: Option<String>,
 ) -> Result<OperationResult, String> {
+    if oids.is_empty() {
+        return Err("没有选择提交".to_string());
+    }
+    if oids.len() > 100 {
+        return Err("一次最多拣选 100 个提交".to_string());
+    }
+    let _guard = lock_ops(&store)?;
+    ensure_no_operation(&store)?;
+    let dir = workdir(&store)?;
+    let mut commits: Vec<String> = Vec::new();
+    for oid in &oids {
+        ensure_oid(oid)?;
+        let commit = resolve_commit(&dir, oid, "提交")?;
+        if !commits.contains(&commit) {
+            commits.push(commit);
+        }
+    }
+    let target_name = target.filter(|value| !value.trim().is_empty());
+    if let Some(name) = target_name.as_deref() {
+        ensure_local_branch(&dir, name)?;
+        let checkout = run_git(&dir, &["checkout", name])?;
+        if !checkout.ok {
+            return Err(checkout.text);
+        }
+    }
+    let mut args: Vec<&str> = vec!["cherry-pick"];
+    args.extend(commits.iter().map(String::as_str));
+    let outcome = run_git(&dir, &args)?;
+    let success = match target_name {
+        Some(name) => format!("已将 {} 个提交拣选到 {name}", commits.len()),
+        None => format!("已拣选 {} 个提交", commits.len()),
+    };
+    finish(&store, outcome, success, true)
+}
+
+#[tauri::command]
+pub fn revert_commit(store: State<'_, RepoStore>, oid: String) -> Result<OperationResult, String> {
     let _guard = lock_ops(&store)?;
     ensure_no_operation(&store)?;
     ensure_oid(&oid)?;
@@ -525,12 +589,7 @@ pub fn revert_commit(
     let commit = resolve_commit(&dir, &oid, "提交")?;
     let outcome = run_git(&dir, &["revert", "--no-edit", commit.as_str()])?;
     let short: String = commit.chars().take(7).collect();
-    finish(
-        &store,
-        outcome,
-        format!("已还原提交 {short}"),
-        true,
-    )
+    finish(&store, outcome, format!("已还原提交 {short}"), true)
 }
 
 #[tauri::command]
@@ -591,7 +650,12 @@ pub fn create_tag(
     let dir = workdir(&store)?;
     validate_tag_name(&dir, &name)?;
     let existing = format!("refs/tags/{name}");
-    if run_git(&dir, &["rev-parse", "--verify", "--quiet", existing.as_str()])?.ok {
+    if run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", existing.as_str()],
+    )?
+    .ok
+    {
         return Err(format!("标签「{name}」已存在"));
     }
     let target = resolve_commit(&dir, &oid, "提交")?;
@@ -609,15 +673,17 @@ pub fn create_tag(
 }
 
 #[tauri::command]
-pub fn delete_tag(
-    store: State<'_, RepoStore>,
-    name: String,
-) -> Result<OperationResult, String> {
+pub fn delete_tag(store: State<'_, RepoStore>, name: String) -> Result<OperationResult, String> {
     let _guard = lock_ops(&store)?;
     let dir = workdir(&store)?;
     validate_tag_name(&dir, &name)?;
     let reference = format!("refs/tags/{name}");
-    if !run_git(&dir, &["rev-parse", "--verify", "--quiet", reference.as_str()])?.ok {
+    if !run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", reference.as_str()],
+    )?
+    .ok
+    {
         return Err(format!("标签「{name}」不存在"));
     }
     let outcome = run_git(&dir, &["tag", "-d", name.as_str()])?;
@@ -674,12 +740,7 @@ pub fn pull_branch(
         _ => run_git(&dir, &["pull", "--no-edit"])?,
     };
     let target = branch.unwrap_or(status.branch);
-    finish(
-        &store,
-        outcome,
-        format!("已拉取 {target} 的最新提交"),
-        true,
-    )
+    finish(&store, outcome, format!("已拉取 {target} 的最新提交"), true)
 }
 
 #[tauri::command]
@@ -728,11 +789,7 @@ pub fn continue_operation(
     let (args, success, conflict_capable) = match kind.as_str() {
         "merge" => (vec!["merge", "--continue"], "合并已完成", true),
         "rebase" => (vec!["rebase", "--continue"], "变基已完成", true),
-        "cherry-pick" => (
-            vec!["cherry-pick", "--continue"],
-            "拣选已完成",
-            true,
-        ),
+        "cherry-pick" => (vec!["cherry-pick", "--continue"], "拣选已完成", true),
         "revert" => (vec!["revert", "--continue"], "还原已完成", true),
         _ => return Err("未知的待继续操作".to_string()),
     };

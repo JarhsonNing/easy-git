@@ -5,15 +5,25 @@ import type {
   AiModels,
   AppConfig,
   ChatMessage,
+  CloneResult,
   CommitDetail,
+  CommitDiff,
   CommitOutcome,
   CommitPage,
   CommitPatch,
-  DiscardMode,
   FileDiff,
   GitLabBranch,
+  GitLabFileContent,
+  GitLabJob,
+  GitLabJobTrace,
+  GitLabPipeline,
+  GitLabPipelinePage,
+  GitLabProject,
+  GitLabProjectPage,
   GitLabProjectRef,
+  GitLabTreePage,
   GitLabUser,
+  LocalProjectMatch,
   MergeRequest,
   MergeRequestChanges,
   MergeRequestFilter,
@@ -21,6 +31,7 @@ import type {
   MergeRequestPage,
   OperationKind,
   OperationResult,
+  RemoteInfo,
   RepoRefs,
   RepoRemoteInfo,
   RepoStatus,
@@ -30,6 +41,7 @@ import type {
   WorkingDiff,
   WorkingFiles,
   WorkingStage,
+  WorkingTarget,
 } from "../types";
 
 export function getSettings(): Promise<AppConfig> {
@@ -140,6 +152,13 @@ export function cherryPick(oid: string, target: string | null): Promise<Operatio
   return invoke<OperationResult>("cherry_pick", { oid, target });
 }
 
+export function cherryPickMany(
+  oids: string[],
+  target: string | null,
+): Promise<OperationResult> {
+  return invoke<OperationResult>("cherry_pick_many", { oids, target });
+}
+
 export function revertCommit(oid: string): Promise<OperationResult> {
   return invoke<OperationResult>("revert_commit", { oid });
 }
@@ -166,6 +185,37 @@ export function deleteTag(name: string): Promise<OperationResult> {
 
 export function fetchRemote(remote: string | null): Promise<OperationResult> {
   return invoke<OperationResult>("fetch_remote", { remote });
+}
+
+export function listRemotes(): Promise<RemoteInfo[]> {
+  return invoke<RemoteInfo[]>("list_remotes");
+}
+
+export function addRemote(name: string, url: string): Promise<OperationResult> {
+  return invoke<OperationResult>("add_remote", { name, url });
+}
+
+export function removeRemote(name: string): Promise<OperationResult> {
+  return invoke<OperationResult>("remove_remote", { name });
+}
+
+export function renameRemote(
+  oldName: string,
+  newName: string,
+): Promise<OperationResult> {
+  return invoke<OperationResult>("rename_remote", { oldName, newName });
+}
+
+export function setRemoteUrl(
+  name: string,
+  url: string,
+  push: boolean,
+): Promise<OperationResult> {
+  return invoke<OperationResult>("set_remote_url", { name, url, push });
+}
+
+export function pruneRemote(name: string): Promise<OperationResult> {
+  return invoke<OperationResult>("prune_remote", { name });
 }
 
 export function pullBranch(
@@ -205,6 +255,14 @@ export function getFileDiff(path: string, stage: WorkingStage): Promise<FileDiff
   return invoke<FileDiff>("get_file_diff", { path, stage });
 }
 
+export function getCommitDiff(oid: string): Promise<CommitDiff> {
+  return invoke<CommitDiff>("get_commit_diff", { oid });
+}
+
+export function diffCommits(from: string, to: string): Promise<CommitDiff> {
+  return invoke<CommitDiff>("diff_commits", { from, to });
+}
+
 export function applyHunk(
   path: string,
   stage: WorkingStage,
@@ -213,12 +271,12 @@ export function applyHunk(
   return invoke<OperationResult>("apply_hunk", { path, stage, hunkIndex });
 }
 
-export function stageFiles(paths: string[]): Promise<OperationResult> {
-  return invoke<OperationResult>("stage_files", { paths });
+export function stageFiles(entries: WorkingTarget[]): Promise<OperationResult> {
+  return invoke<OperationResult>("stage_files", { entries });
 }
 
-export function unstageFiles(paths: string[]): Promise<OperationResult> {
-  return invoke<OperationResult>("unstage_files", { paths });
+export function unstageFiles(entries: WorkingTarget[]): Promise<OperationResult> {
+  return invoke<OperationResult>("unstage_files", { entries });
 }
 
 export function stageAll(): Promise<OperationResult> {
@@ -229,8 +287,8 @@ export function unstageAll(): Promise<OperationResult> {
   return invoke<OperationResult>("unstage_all");
 }
 
-export function discardFiles(paths: string[], mode: DiscardMode): Promise<OperationResult> {
-  return invoke<OperationResult>("discard_files", { paths, mode });
+export function discardFiles(entries: WorkingTarget[]): Promise<OperationResult> {
+  return invoke<OperationResult>("discard_files", { entries });
 }
 
 export function commitIdentity(): Promise<string | null> {
@@ -401,4 +459,109 @@ export function errorText(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+export function listGitLabProjects(
+  instanceId: string,
+  search: string | null,
+  page: number,
+): Promise<GitLabProjectPage> {
+  return invoke<GitLabProjectPage>("list_gitlab_projects", { instanceId, search, page });
+}
+
+export function listLocalProjectMatches(instanceId: string): Promise<LocalProjectMatch[]> {
+  return invoke<LocalProjectMatch[]>("list_local_project_matches", { instanceId });
+}
+
+export function getGitLabProject(
+  instanceId: string,
+  projectPath: string,
+): Promise<GitLabProject> {
+  return invoke<GitLabProject>("get_gitlab_project", { instanceId, projectPath });
+}
+
+export function listRepositoryTree(
+  instanceId: string,
+  projectPath: string,
+  gitRef: string | null,
+  path: string | null,
+  page: number,
+): Promise<GitLabTreePage> {
+  return invoke<GitLabTreePage>("list_repository_tree", {
+    instanceId,
+    projectPath,
+    gitRef,
+    path,
+    page,
+  });
+}
+
+export function readGitLabFile(
+  instanceId: string,
+  projectPath: string,
+  filePath: string,
+  gitRef: string | null,
+): Promise<GitLabFileContent> {
+  return invoke<GitLabFileContent>("read_gitlab_file", {
+    instanceId,
+    projectPath,
+    filePath,
+    gitRef,
+  });
+}
+
+export function listPipelines(
+  instanceId: string,
+  projectPath: string,
+  page: number,
+): Promise<GitLabPipelinePage> {
+  return invoke<GitLabPipelinePage>("list_pipelines", { instanceId, projectPath, page });
+}
+
+export function createGitLabPipeline(
+  instanceId: string,
+  projectPath: string,
+  branch: string,
+): Promise<GitLabPipeline> {
+  return invoke<GitLabPipeline>("create_gitlab_pipeline", { instanceId, projectPath, branch });
+}
+
+export function listPipelineJobs(
+  instanceId: string,
+  projectPath: string,
+  pipelineId: number,
+): Promise<GitLabJob[]> {
+  return invoke<GitLabJob[]>("list_pipeline_jobs", {
+    instanceId,
+    projectPath,
+    pipelineId,
+  });
+}
+
+export function getJobTrace(
+  instanceId: string,
+  projectPath: string,
+  jobId: number,
+): Promise<GitLabJobTrace> {
+  return invoke<GitLabJobTrace>("get_job_trace", { instanceId, projectPath, jobId });
+}
+
+export function syncGitLabFork(
+  instanceId: string,
+  projectPath: string,
+  targetBranch: string,
+): Promise<string> {
+  return invoke<string>("sync_gitlab_fork", { instanceId, projectPath, targetBranch });
+}
+
+export function cloneGitLabProject(
+  instanceId: string,
+  projectPath: string,
+  parentDir: string,
+): Promise<CloneResult> {
+  return invoke<CloneResult>("clone_gitlab_project", {
+    instanceId,
+    projectPath,
+    parentDir,
+  });
 }

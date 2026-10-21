@@ -1,17 +1,19 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use git2::{DiffFormat, DiffOptions, Repository, Status, StatusOptions};
-use serde::Serialize;
+use git2::{DiffFormat, DiffOptions, Oid, Repository, Status, StatusOptions};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::branch::{
-    ensure_no_operation, finish, reject_dash, run_git, run_git_raw, run_git_stdin,
+    GitOutput, ensure_no_operation, finish, reject_dash, run_git, run_git_raw, run_git_stdin,
 };
-use super::repo::{lock_ops, with_open, workdir, OperationResult, RepoStore};
+use super::repo::{OperationResult, RepoStore, lock_ops, with_open, workdir};
 
 const FILE_LIMIT: usize = 400;
 const DIFF_CHAR_LIMIT: usize = 80_000;
+const COMMIT_FILE_LIMIT: usize = 300;
+const COMMIT_DIFF_LIMIT: usize = 600_000;
 const UNTRACKED_BYTE_LIMIT: usize = 512_000;
 const UNTRACKED_LINE_LIMIT: usize = 4_000;
 
@@ -72,6 +74,38 @@ pub struct StashEntry {
     pub date: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingTarget {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: String,
+    pub stage: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFileDiff {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: String,
+    pub additions: usize,
+    pub deletions: usize,
+    pub binary: bool,
+    pub truncated: bool,
+    pub hunks: Vec<Hunk>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDiff {
+    pub oid: String,
+    pub files: Vec<CommitFileDiff>,
+    pub additions: usize,
+    pub deletions: usize,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitOutcome {
@@ -118,7 +152,13 @@ fn count_lines(diff: &git2::Diff) -> Result<HashMap<String, (usize, usize)>, Str
 
 fn side_counts(
     repo: &Repository,
-) -> Result<(HashMap<String, (usize, usize)>, HashMap<String, (usize, usize)>), String> {
+) -> Result<
+    (
+        HashMap<String, (usize, usize)>,
+        HashMap<String, (usize, usize)>,
+    ),
+    String,
+> {
     let head_tree = match repo.head() {
         Ok(head) => head.peel_to_tree().ok(),
         Err(_) => None,
@@ -171,6 +211,11 @@ fn reported_paths(repo: &Repository) -> Result<HashSet<String>, String> {
                 set.insert(normalize(old));
             }
         }
+        if let Some(delta) = entry.index_to_workdir() {
+            if let Some(old) = delta.old_file().path() {
+                set.insert(normalize(old));
+            }
+        }
     }
     Ok(set)
 }
@@ -191,6 +236,45 @@ fn ensure_reported(store: &RepoStore, paths: &[String]) -> Result<(), String> {
 
 fn ensure_path(store: &RepoStore, path: &str) -> Result<(), String> {
     ensure_reported(store, &[path.to_string()])
+}
+
+fn push_unique(paths: &mut Vec<String>, value: &str) {
+    if !paths.iter().any(|existing| existing == value) {
+        paths.push(value.to_string());
+    }
+}
+
+/// Validates the entries the UI selected and flattens them into the pathspecs Git needs.
+/// Old paths are included so renames are applied to both sides of the move.
+fn collect_target_paths(
+    store: &RepoStore,
+    entries: &[WorkingTarget],
+    allowed: &[&str],
+) -> Result<Vec<String>, String> {
+    if entries.is_empty() {
+        return Err("没有选择文件".to_string());
+    }
+    let reported = with_open(store, reported_paths)?;
+    let mut paths: Vec<String> = Vec::new();
+    for entry in entries {
+        if !allowed.contains(&entry.stage.as_str()) {
+            return Err("该文件当前不支持这个操作，请刷新后重试".to_string());
+        }
+        for value in [Some(&entry.path), entry.old_path.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            reject_dash(value, "文件路径")?;
+            if value.contains('\0') || value.contains("..") {
+                return Err(format!("文件路径「{value}」不合法"));
+            }
+            if !reported.contains(value.as_str()) {
+                return Err("变更清单已更新，请刷新后重试".to_string());
+            }
+            push_unique(&mut paths, value);
+        }
+    }
+    Ok(paths)
 }
 
 fn pathspec_args<'a>(base: &[&'a str], paths: &'a [String]) -> Vec<&'a str> {
@@ -369,7 +453,10 @@ fn parse_patch(text: &str) -> ParsedPatch {
         .map(|(index, _)| index)
         .collect();
 
-    let binary = text.contains("GIT binary patch");
+    let binary = text.contains("GIT binary patch")
+        || text
+            .lines()
+            .any(|line| line.starts_with("Binary files ") || line.starts_with("Files "));
     if hunk_positions.is_empty() {
         return ParsedPatch {
             header: text.to_string(),
@@ -404,7 +491,10 @@ fn parse_patch(text: &str) -> ParsedPatch {
         consumed += cost;
 
         let header_line = text[start..ends[*hunk_index]].trim_end().to_string();
-        let remainder = &body[body.find('\n').map(|offset| offset + 1).unwrap_or(body.len())..];
+        let remainder = &body[body
+            .find('\n')
+            .map(|offset| offset + 1)
+            .unwrap_or(body.len())..];
         let mut parsed_lines: Vec<DiffLine> = Vec::new();
         let mut additions = 0;
         let mut deletions = 0;
@@ -465,6 +555,168 @@ fn to_file_diff(path: &str, stage: &str, parsed: ParsedPatch) -> FileDiff {
         additions,
         deletions,
         hunks,
+    }
+}
+
+struct ParsedFilePatch {
+    path: String,
+    old_path: Option<String>,
+    status: String,
+    diff: ParsedPatch,
+}
+
+fn split_patch_chunks(text: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("diff --git ") || line.starts_with("diff --cc ") {
+            if let Some(begin) = start {
+                chunks.push(&text[begin..offset]);
+            }
+            start = Some(offset);
+        }
+        offset += line.len();
+    }
+    if let Some(begin) = start {
+        chunks.push(&text[begin..]);
+    }
+    chunks
+}
+
+fn header_path(chunk: &str, marker: &str) -> Option<String> {
+    for line in chunk.lines() {
+        if let Some(rest) = line.strip_prefix(marker) {
+            if rest == "/dev/null" {
+                return None;
+            }
+            let path = rest
+                .strip_prefix("a/")
+                .or_else(|| rest.strip_prefix("b/"))
+                .unwrap_or(rest);
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+fn metadata_path(chunk: &str, marker: &str) -> Option<String> {
+    chunk
+        .lines()
+        .find_map(|line| line.strip_prefix(marker))
+        .map(|value| value.trim().to_string())
+}
+
+fn file_status(chunk: &str) -> &'static str {
+    if chunk.lines().any(|line| line.starts_with("new file mode ")) {
+        "added"
+    } else if chunk
+        .lines()
+        .any(|line| line.starts_with("deleted file mode "))
+    {
+        "deleted"
+    } else if chunk.lines().any(|line| line.starts_with("rename from ")) {
+        "renamed"
+    } else if chunk.lines().any(|line| line.starts_with("copy from ")) {
+        "copied"
+    } else if chunk.lines().any(|line| line.starts_with("old mode ")) {
+        "typechange"
+    } else {
+        "modified"
+    }
+}
+
+fn parse_file_patches(text: &str) -> (Vec<ParsedFilePatch>, bool) {
+    let mut files = Vec::new();
+    let mut truncated = false;
+    let mut budget = 0usize;
+    for chunk in split_patch_chunks(text) {
+        let cost = chunk.chars().count();
+        if files.len() >= COMMIT_FILE_LIMIT
+            || (!files.is_empty() && budget + cost > COMMIT_DIFF_LIMIT)
+        {
+            truncated = true;
+            break;
+        }
+        budget += cost;
+        let status = file_status(chunk);
+        let new_path = header_path(chunk, "+++ ");
+        let old_path = header_path(chunk, "--- ");
+        let renamed_to = metadata_path(chunk, "rename to ");
+        let renamed_from = metadata_path(chunk, "rename from ");
+        let path = renamed_to
+            .or_else(|| new_path)
+            .or_else(|| old_path.clone())
+            .or_else(|| {
+                chunk
+                    .lines()
+                    .next()
+                    .and_then(|line| line.rsplit_once(" b/").map(|(_, value)| value.to_string()))
+            })
+            .unwrap_or_default();
+        if path.is_empty() {
+            continue;
+        }
+        let old = renamed_from.or(old_path).filter(|value| *value != path);
+        files.push(ParsedFilePatch {
+            path,
+            old_path: old,
+            status: status.to_string(),
+            diff: parse_patch(chunk),
+        });
+    }
+    (files, truncated)
+}
+
+fn build_commit_diff(oid: &str, text: &str) -> CommitDiff {
+    let (parsed, truncated) = parse_file_patches(text);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    let mut files = Vec::with_capacity(parsed.len());
+    for file in parsed {
+        let file_additions = file
+            .diff
+            .hunks
+            .iter()
+            .map(|hunk| hunk.additions)
+            .sum::<usize>();
+        let file_deletions = file
+            .diff
+            .hunks
+            .iter()
+            .map(|hunk| hunk.deletions)
+            .sum::<usize>();
+        additions += file_additions;
+        deletions += file_deletions;
+        files.push(CommitFileDiff {
+            path: file.path,
+            old_path: file.old_path,
+            status: file.status,
+            additions: file_additions,
+            deletions: file_deletions,
+            binary: file.diff.binary,
+            truncated: file.diff.truncated,
+            hunks: file
+                .diff
+                .hunks
+                .into_iter()
+                .enumerate()
+                .map(|(index, hunk)| Hunk {
+                    index,
+                    header: hunk.header,
+                    additions: hunk.additions,
+                    deletions: hunk.deletions,
+                    lines: hunk.lines,
+                })
+                .collect(),
+        });
+    }
+    CommitDiff {
+        oid: oid.to_string(),
+        files,
+        additions,
+        deletions,
+        truncated,
     }
 }
 
@@ -534,7 +786,11 @@ fn untracked_diff(dir: &Path, path: &str) -> Result<FileDiff, String> {
             text: raw.to_string(),
         });
     }
-    if lines.last().map(|line| line.text.is_empty()).unwrap_or(false) {
+    if lines
+        .last()
+        .map(|line| line.text.is_empty())
+        .unwrap_or(false)
+    {
         lines.pop();
     }
     let additions = lines.len();
@@ -577,6 +833,94 @@ pub fn get_file_diff(
         }
         _ => Err("未知的差异来源".to_string()),
     }
+}
+
+#[tauri::command]
+pub fn get_commit_diff(store: State<'_, RepoStore>, oid: String) -> Result<CommitDiff, String> {
+    let (resolved, first_parent) = with_open(&store, |repo| {
+        let oid = Oid::from_str(&oid).map_err(|error| format!("无效的提交哈希: {error}"))?;
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|error| format!("找不到提交: {error}"))?;
+        let parent = if commit.parent_count() > 1 {
+            Some(
+                commit
+                    .parent_id(0)
+                    .map_err(|error| format!("读取父提交失败: {error}"))?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        Ok((oid.to_string(), parent))
+    })?;
+    let dir = workdir(&store)?;
+    let text = match first_parent {
+        Some(parent) => run_git_raw(
+            &dir,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-color",
+                "--unified=3",
+                "-M",
+                parent.as_str(),
+                resolved.as_str(),
+            ],
+        )?,
+        None => run_git_raw(
+            &dir,
+            &[
+                "show",
+                "--format=",
+                "--no-ext-diff",
+                "--no-color",
+                "--unified=3",
+                "-M",
+                resolved.as_str(),
+            ],
+        )?,
+    };
+    if !text.ok {
+        return Err(if text.error.is_empty() {
+            "读取提交差异失败".to_string()
+        } else {
+            text.error
+        });
+    }
+    Ok(build_commit_diff(&resolved, &text.stdout))
+}
+
+#[tauri::command]
+pub fn diff_commits(
+    store: State<'_, RepoStore>,
+    from: String,
+    to: String,
+) -> Result<CommitDiff, String> {
+    for value in [&from, &to] {
+        Oid::from_str(value).map_err(|error| format!("无效的提交哈希: {error}"))?;
+    }
+    let dir = workdir(&store)?;
+    let text = run_git_raw(
+        &dir,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "--unified=3",
+            "-M",
+            from.as_str(),
+            to.as_str(),
+        ],
+    )?;
+    if !text.ok {
+        return Err(if text.error.is_empty() {
+            "对比提交失败".to_string()
+        } else {
+            text.error
+        });
+    }
+    Ok(build_commit_diff(&format!("{from}..{to}"), &text.stdout))
 }
 
 #[tauri::command]
@@ -629,75 +973,182 @@ pub fn apply_hunk(
 #[tauri::command]
 pub fn stage_files(
     store: State<'_, RepoStore>,
-    paths: Vec<String>,
+    entries: Vec<WorkingTarget>,
 ) -> Result<OperationResult, String> {
-    if paths.is_empty() {
-        return Err("没有选择文件".to_string());
-    }
     let _guard = lock_ops(&store)?;
-    ensure_reported(&store, &paths)?;
+    let paths = collect_target_paths(&store, &entries, &["staged", "unstaged", "untracked"])?;
     let dir = workdir(&store)?;
     let args = pathspec_args(&["add", "-A"], &paths);
     let outcome = run_git(&dir, &args)?;
-    let message = format!("已暂存 {} 个文件", paths.len());
+    let message = format!("已暂存 {} 个文件", entries.len());
     finish(&store, outcome, message, false)
 }
 
 #[tauri::command]
 pub fn unstage_files(
     store: State<'_, RepoStore>,
-    paths: Vec<String>,
+    entries: Vec<WorkingTarget>,
 ) -> Result<OperationResult, String> {
-    if paths.is_empty() {
-        return Err("没有选择文件".to_string());
-    }
     let _guard = lock_ops(&store)?;
-    ensure_reported(&store, &paths)?;
+    let paths = collect_target_paths(&store, &entries, &["staged"])?;
     let dir = workdir(&store)?;
-    let args = pathspec_args(&["restore", "--staged"], &paths);
+    // `reset` also works before the first commit, where `restore --staged` cannot resolve HEAD.
+    let args = pathspec_args(&["reset", "-q"], &paths);
     let outcome = run_git(&dir, &args)?;
-    let message = format!("已取消暂存 {} 个文件", paths.len());
+    let message = format!("已取消暂存 {} 个文件", entries.len());
     finish(&store, outcome, message, false)
 }
 
 #[tauri::command]
 pub fn stage_all(store: State<'_, RepoStore>) -> Result<OperationResult, String> {
     let _guard = lock_ops(&store)?;
+    let snapshot = with_open(&store, working_snapshot)?;
+    let mut paths: Vec<String> = Vec::new();
+    for file in &snapshot.files {
+        if file.stage == "conflicted" {
+            continue;
+        }
+        push_unique(&mut paths, &file.path);
+        if let Some(old) = &file.old_path {
+            push_unique(&mut paths, old);
+        }
+    }
+    if paths.is_empty() {
+        return Err("没有可暂存的变更".to_string());
+    }
     let dir = workdir(&store)?;
-    let outcome = run_git(&dir, &["add", "-A", "--", "."])?;
+    let args = pathspec_args(&["add", "-A"], &paths);
+    let outcome = run_git(&dir, &args)?;
     finish(&store, outcome, "已暂存全部变更", false)
 }
 
 #[tauri::command]
 pub fn unstage_all(store: State<'_, RepoStore>) -> Result<OperationResult, String> {
     let _guard = lock_ops(&store)?;
+    let snapshot = with_open(&store, working_snapshot)?;
+    let mut paths: Vec<String> = Vec::new();
+    for file in snapshot.files.iter().filter(|file| file.stage == "staged") {
+        push_unique(&mut paths, &file.path);
+        if let Some(old) = &file.old_path {
+            push_unique(&mut paths, old);
+        }
+    }
+    if paths.is_empty() {
+        return Err("暂存区已经是空的".to_string());
+    }
     let dir = workdir(&store)?;
-    let outcome = run_git(&dir, &["restore", "--staged", "--", "."])?;
+    let args = pathspec_args(&["reset", "-q"], &paths);
+    let outcome = run_git(&dir, &args)?;
     finish(&store, outcome, "已取消暂存全部变更", false)
+}
+
+struct DiscardPlan {
+    reset: Vec<String>,
+    head: Vec<String>,
+    work: Vec<String>,
+    clean: Vec<String>,
+}
+
+fn discard_plan(entries: &[WorkingTarget]) -> Result<DiscardPlan, String> {
+    let mut plan = DiscardPlan {
+        reset: Vec::new(),
+        head: Vec::new(),
+        work: Vec::new(),
+        clean: Vec::new(),
+    };
+
+    for entry in entries {
+        match (entry.stage.as_str(), entry.status.as_str()) {
+            ("conflicted", _) => {
+                return Err("冲突文件请先解决冲突，或中止当前操作".to_string());
+            }
+            ("staged", "added") => {
+                // A brand-new staged file has no HEAD version, so unstage and remove it.
+                push_unique(&mut plan.reset, &entry.path);
+                push_unique(&mut plan.clean, &entry.path);
+            }
+            ("staged", _) => {
+                push_unique(&mut plan.head, &entry.path);
+                if let Some(old) = &entry.old_path {
+                    push_unique(&mut plan.head, old);
+                }
+            }
+            ("unstaged", "renamed") => {
+                match &entry.old_path {
+                    Some(old) => push_unique(&mut plan.work, old),
+                    None => push_unique(&mut plan.work, &entry.path),
+                }
+                // The new side of a worktree rename is still untracked; drop it too.
+                push_unique(&mut plan.clean, &entry.path);
+            }
+            ("unstaged", _) => {
+                push_unique(&mut plan.work, &entry.path);
+                if let Some(old) = &entry.old_path {
+                    push_unique(&mut plan.work, old);
+                }
+            }
+            ("untracked", _) => push_unique(&mut plan.clean, &entry.path),
+            _ => return Err("该文件当前不支持丢弃，请刷新后重试".to_string()),
+        }
+    }
+
+    // Restoring a path and then cleaning it is redundant, and clean covers the
+    // staged-added case where the path is no longer in the index.
+    plan.work.retain(|path| !plan.clean.contains(path));
+    plan.head.retain(|path| !plan.reset.contains(path));
+    Ok(plan)
 }
 
 #[tauri::command]
 pub fn discard_files(
     store: State<'_, RepoStore>,
-    paths: Vec<String>,
-    mode: String,
+    entries: Vec<WorkingTarget>,
 ) -> Result<OperationResult, String> {
-    if paths.is_empty() {
-        return Err("没有选择文件".to_string());
-    }
     let _guard = lock_ops(&store)?;
     ensure_no_operation(&store)?;
-    ensure_reported(&store, &paths)?;
+    collect_target_paths(
+        &store,
+        &entries,
+        &["staged", "unstaged", "untracked", "conflicted"],
+    )?;
     let dir = workdir(&store)?;
-    let args: Vec<&str> = match mode.as_str() {
-        "head" => pathspec_args(&["restore", "--source=HEAD", "--staged", "--worktree"], &paths),
-        "unstage" => pathspec_args(&["restore", "--staged"], &paths),
-        "clean" => pathspec_args(&["clean", "-f", "-q"], &paths),
-        _ => return Err("未知的丢弃方式".to_string()),
+    let plan = discard_plan(&entries)?;
+
+    let mut last = GitOutput {
+        ok: true,
+        text: String::new(),
     };
-    let outcome = run_git(&dir, &args)?;
-    let message = format!("已丢弃 {} 个文件的更改", paths.len());
-    finish(&store, outcome, message, false)
+    let mut apply = |args: Vec<&str>| -> Result<(), String> {
+        let outcome = run_git(&dir, &args)?;
+        if !outcome.ok {
+            return Err(if outcome.text.is_empty() {
+                "丢弃更改失败，请检查仓库状态".to_string()
+            } else {
+                outcome.text
+            });
+        }
+        last = outcome;
+        Ok(())
+    };
+
+    if !plan.reset.is_empty() {
+        apply(pathspec_args(&["reset", "-q"], &plan.reset))?;
+    }
+    if !plan.head.is_empty() {
+        apply(pathspec_args(
+            &["restore", "--source=HEAD", "--staged", "--worktree"],
+            &plan.head,
+        ))?;
+    }
+    if !plan.work.is_empty() {
+        apply(pathspec_args(&["restore", "--worktree"], &plan.work))?;
+    }
+    if !plan.clean.is_empty() {
+        apply(pathspec_args(&["clean", "-f", "-q"], &plan.clean))?;
+    }
+
+    let message = format!("已丢弃 {} 个文件的更改", entries.len());
+    finish(&store, last, message, false)
 }
 
 #[tauri::command]
@@ -953,7 +1404,8 @@ mod tests {
 
     #[test]
     fn parses_stash_rows_around_the_unit_separator() {
-        let rows = stash_rows("stash@{0}\u{1f}WIP on main: abc subject\u{1f}2026-10-20T10:00:00+08:00\n");
+        let rows =
+            stash_rows("stash@{0}\u{1f}WIP on main: abc subject\u{1f}2026-10-20T10:00:00+08:00\n");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].reference, "stash@{0}");
         assert!(rows[0].message.starts_with("WIP on main"));
@@ -961,10 +1413,7 @@ mod tests {
 
     #[test]
     fn staging_one_hunk_leaves_the_other_in_the_worktree() {
-        let dir = std::env::temp_dir().join(format!(
-            "easy-git-hunk-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("easy-git-hunk-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
@@ -976,15 +1425,16 @@ mod tests {
             body.push_str(&format!("line {index}\n"));
         }
         std::fs::write(dir.join("app.js"), &body).expect("write file");
-        assert!(run_git(&dir, &[&identity[..], &["add", "app.js"]].concat())
-            .expect("git")
-            .ok);
-        assert!(run_git(
-            &dir,
-            &[&identity[..], &["commit", "-m", "base"]].concat()
-        )
-        .expect("git")
-        .ok);
+        assert!(
+            run_git(&dir, &[&identity[..], &["add", "app.js"]].concat())
+                .expect("git")
+                .ok
+        );
+        assert!(
+            run_git(&dir, &[&identity[..], &["commit", "-m", "base"]].concat())
+                .expect("git")
+                .ok
+        );
 
         let edited = body
             .replace("line 2\n", "line 2\ninserted top\n")
@@ -998,7 +1448,13 @@ mod tests {
         let patch = format!("{}{}", parsed.header, parsed.hunks[0].body);
         let applied = run_git_stdin(
             &dir,
-            &["apply", "--cached", "--recount", "--whitespace=nowarn", "--unidiff-zero"],
+            &[
+                "apply",
+                "--cached",
+                "--recount",
+                "--whitespace=nowarn",
+                "--unidiff-zero",
+            ],
             patch.as_bytes(),
         )
         .expect("apply");
@@ -1032,10 +1488,8 @@ mod tests {
 
     #[test]
     fn pathspec_args_stage_unstage_and_discard_reach_the_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "easy-git-pathspec-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("easy-git-pathspec-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
@@ -1056,26 +1510,30 @@ mod tests {
         std::fs::write(dir.join("scratch.txt"), "temp\n").expect("write untracked");
 
         let paths = vec!["app.js".to_string()];
-        let staged = run_git(
-            &dir,
-            &pathspec_args(&["add", "-A"], &paths),
-        )
-        .expect("git");
+        let staged = run_git(&dir, &pathspec_args(&["add", "-A"], &paths)).expect("git");
         assert!(staged.ok, "stage failed: {}", staged.text);
-        assert!(diff_text(&dir, "app.js", true).expect("diff").contains("+four"));
+        assert!(
+            diff_text(&dir, "app.js", true)
+                .expect("diff")
+                .contains("+four")
+        );
 
-        let unstaged = run_git(
-            &dir,
-            &pathspec_args(&["restore", "--staged"], &paths),
-        )
-        .expect("git");
+        let unstaged =
+            run_git(&dir, &pathspec_args(&["restore", "--staged"], &paths)).expect("git");
         assert!(unstaged.ok, "unstage failed: {}", unstaged.text);
         assert!(diff_text(&dir, "app.js", true).expect("diff").is_empty());
-        assert!(diff_text(&dir, "app.js", false).expect("diff").contains("+four"));
+        assert!(
+            diff_text(&dir, "app.js", false)
+                .expect("diff")
+                .contains("+four")
+        );
 
         let dropped = run_git(
             &dir,
-            &pathspec_args(&["restore", "--source=HEAD", "--staged", "--worktree"], &paths),
+            &pathspec_args(
+                &["restore", "--source=HEAD", "--staged", "--worktree"],
+                &paths,
+            ),
         )
         .expect("git");
         assert!(dropped.ok, "discard failed: {}", dropped.text);
@@ -1097,10 +1555,7 @@ mod tests {
 
     #[test]
     fn counts_are_attributed_once_per_path() {
-        let dir = std::env::temp_dir().join(format!(
-            "easy-git-count-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("easy-git-count-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
@@ -1131,6 +1586,161 @@ mod tests {
         assert_eq!(work.get("a.js").copied(), Some((1, 1)));
         assert_eq!(staged.get("b.js").copied(), Some((0, 4)));
         assert_eq!(staged.get("c.js").copied(), Some((4, 0)));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_a_multi_file_commit_patch() {
+        let text = concat!(
+            "diff --git a/app.js b/app.js\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/app.js\n",
+            "+++ b/app.js\n",
+            "@@ -1 +1,2 @@\n",
+            " a\n",
+            "+b\n",
+            "diff --git a/old.txt b/new name.txt\n",
+            "similarity index 100%\n",
+            "rename from old.txt\n",
+            "rename to new name.txt\n",
+            "diff --git a/gone.txt b/gone.txt\n",
+            "deleted file mode 100644\n",
+            "index 1111111..0000000\n",
+            "--- a/gone.txt\n",
+            "+++ /dev/null\n",
+            "@@ -1 +0,0 @@\n",
+            "-bye\n",
+            "diff --git a/logo.png b/logo.png\n",
+            "index 1111111..2222222 100644\n",
+            "Binary files a/logo.png and b/logo.png differ\n",
+            "diff --git a/added.txt b/added.txt\n",
+            "new file mode 100644\n",
+            "index 0000000..2222222\n",
+            "--- /dev/null\n",
+            "+++ b/added.txt\n",
+            "@@ -0,0 +1 @@\n",
+            "+hi\n",
+        );
+        let diff = build_commit_diff("abc", text);
+        assert_eq!(diff.files.len(), 5);
+        assert_eq!(diff.additions, 2);
+        assert_eq!(diff.deletions, 1);
+        assert!(!diff.truncated);
+
+        let app = diff
+            .files
+            .iter()
+            .find(|file| file.path == "app.js")
+            .unwrap();
+        assert_eq!(app.status, "modified");
+        assert_eq!(app.additions, 1);
+        assert!(!app.binary);
+
+        let renamed = diff
+            .files
+            .iter()
+            .find(|file| file.path == "new name.txt")
+            .unwrap();
+        assert_eq!(renamed.status, "renamed");
+        assert_eq!(renamed.old_path.as_deref(), Some("old.txt"));
+        assert!(renamed.hunks.is_empty());
+
+        let removed = diff
+            .files
+            .iter()
+            .find(|file| file.path == "gone.txt")
+            .unwrap();
+        assert_eq!(removed.status, "deleted");
+        assert_eq!(removed.deletions, 1);
+
+        let binary = diff
+            .files
+            .iter()
+            .find(|file| file.path == "logo.png")
+            .unwrap();
+        assert!(binary.binary);
+        assert!(binary.hunks.is_empty());
+
+        let added = diff
+            .files
+            .iter()
+            .find(|file| file.path == "added.txt")
+            .unwrap();
+        assert_eq!(added.status, "added");
+        assert_eq!(added.additions, 1);
+    }
+
+    #[test]
+    fn discard_plan_routes_each_entry_to_the_right_command() {
+        let entries = vec![
+            WorkingTarget {
+                path: "new.txt".to_string(),
+                old_path: None,
+                status: "added".to_string(),
+                stage: "staged".to_string(),
+            },
+            WorkingTarget {
+                path: "new.txt".to_string(),
+                old_path: None,
+                status: "modified".to_string(),
+                stage: "unstaged".to_string(),
+            },
+            WorkingTarget {
+                path: "gone.txt".to_string(),
+                old_path: None,
+                status: "deleted".to_string(),
+                stage: "staged".to_string(),
+            },
+            WorkingTarget {
+                path: "work.txt".to_string(),
+                old_path: None,
+                status: "modified".to_string(),
+                stage: "unstaged".to_string(),
+            },
+            WorkingTarget {
+                path: "tmp.txt".to_string(),
+                old_path: None,
+                status: "added".to_string(),
+                stage: "untracked".to_string(),
+            },
+        ];
+        let plan = discard_plan(&entries).expect("plan");
+        assert_eq!(plan.reset, vec!["new.txt"]);
+        assert_eq!(plan.clean, vec!["new.txt", "tmp.txt"]);
+        assert_eq!(plan.head, vec!["gone.txt"]);
+        assert_eq!(plan.work, vec!["work.txt"]);
+
+        let conflict = vec![WorkingTarget {
+            path: "conflict.txt".to_string(),
+            old_path: None,
+            status: "modified".to_string(),
+            stage: "conflicted".to_string(),
+        }];
+        assert!(discard_plan(&conflict).is_err());
+    }
+
+    #[test]
+    fn reset_unstages_before_the_first_commit() {
+        let dir = std::env::temp_dir().join(format!("easy-git-unborn-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        assert!(run_git(&dir, &["init", "."]).expect("git").ok);
+        std::fs::write(dir.join("first.txt"), "hello\n").expect("write file");
+        assert!(
+            run_git(&dir, &["add", "-A", "--", "first.txt"])
+                .expect("git")
+                .ok
+        );
+        assert!(
+            diff_text(&dir, "first.txt", true)
+                .expect("diff")
+                .contains("+hello")
+        );
+
+        let outcome = run_git(&dir, &["reset", "-q", "--", "first.txt"]).expect("git");
+        assert!(outcome.ok, "unstage failed: {}", outcome.text);
+        assert!(diff_text(&dir, "first.txt", true).expect("diff").is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

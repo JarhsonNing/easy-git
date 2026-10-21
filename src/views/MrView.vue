@@ -13,6 +13,7 @@ import {
   branchesError,
   branchesLoading,
   changes,
+  consumeCreateRequest,
   createCurrentMR,
   detail,
   detailError,
@@ -41,6 +42,7 @@ import {
   toggleCurrentState,
 } from "../stores/mr";
 import { navigate } from "../stores/ui";
+import type { CreateRequest } from "../stores/mr";
 import type { MergeRequest, MergeRequestFile, MergeRequestFilter } from "../types";
 
 const stateTabs: { key: MergeRequestFilter; label: string }[] = [
@@ -78,8 +80,11 @@ const currentMergeHint = computed(() =>
 let searchTimer: number | undefined;
 
 async function enter() {
+  const request = consumeCreateRequest();
   await prepare();
-  if (project.value) await loadList(true);
+  if (!project.value) return;
+  await loadList(true);
+  if (request) await openCreate(request);
 }
 
 function onEscape(event: KeyboardEvent) {
@@ -305,12 +310,12 @@ async function toggleState() {
   await toggleCurrentState();
 }
 
-async function openCreate() {
+async function openCreate(prefill?: CreateRequest) {
   createError.value = "";
   actionError.value = "";
   createOpen.value = true;
   createDescription.value = "";
-  await loadBranches();
+  await loadBranches(Boolean(prefill));
   const list = branches.value;
   const defaultBranch = list.find((branch) => branch.isDefault)?.name ?? list[0]?.name ?? "";
   createTarget.value = defaultBranch;
@@ -319,6 +324,22 @@ async function openCreate() {
   createTitle.value = head;
   createRemoveSource.value = true;
   if (!list.length && branchesError.value) createError.value = branchesError.value;
+
+  if (prefill) {
+    const source = list.find((branch) => branch.name === prefill.source);
+    const target = list.find((branch) => branch.name === prefill.target);
+    if (source) createSource.value = prefill.source;
+    if (target) createTarget.value = prefill.target;
+    createTitle.value = prefill.source;
+    if (!branchesError.value) {
+      const missing: string[] = [];
+      if (!source) missing.push(prefill.source);
+      if (!target) missing.push(prefill.target);
+      if (missing.length) {
+        createError.value = `GitLab 上还没有分支 ${missing.join("、")}，请先推送后再新建合并请求。`;
+      }
+    }
+  }
 }
 
 function closeCreate() {
@@ -396,7 +417,7 @@ async function submitCreate() {
             <Icon name="refresh" :size="15" />
             {{ refreshing ? "刷新中…" : "刷新" }}
           </button>
-          <button type="button" class="button primary small" :disabled="!project" @click="openCreate">
+          <button type="button" class="button primary small" :disabled="!project" @click="openCreate()">
             <Icon name="plus" :size="16" />
             新建合并请求
           </button>

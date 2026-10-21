@@ -121,11 +121,16 @@ fn summarize(repo: &Repository, fallback_path: &str) -> RepoSummary {
 
     RepoSummary {
         name,
-        path: root.to_string_lossy().to_string(),
+        path: trim_trailing_separators(&root.to_string_lossy()),
         head_branch,
         head_oid,
         remote_url,
     }
+}
+
+/// libgit2 把工作目录规范化成带结尾分隔符的形式，展示和写回配置时都要去掉。
+fn trim_trailing_separators(value: &str) -> String {
+    value.trim_end_matches(['/', '\\']).to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
