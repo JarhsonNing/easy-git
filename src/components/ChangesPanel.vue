@@ -10,6 +10,7 @@ const props = defineProps<{
   truncated?: boolean;
   loading?: boolean;
   disabled?: boolean;
+  collapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   (e: "discard-files", files: WorkingFile[]): void;
   (e: "stash"): void;
   (e: "refresh"): void;
+  (e: "toggle-collapse"): void;
 }>();
 
 type ViewMode = "path" | "tree";
@@ -67,9 +69,21 @@ const STATUS_GLYPH: Record<string, string> = {
 const viewMode = ref<ViewMode>("path");
 const query = ref("");
 const checked = ref<Set<string>>(new Set());
-const collapsed = ref<Set<string>>(new Set());
+const folded = ref<Set<string>>(new Set());
+const cardsClosed = ref<Set<string>>(new Set());
 const anchor = ref<string | null>(null);
 const menu = ref<{ x: number; y: number; item: WorkingFile } | null>(null);
+
+function isCardOpen(key: string): boolean {
+  return !cardsClosed.value.has(key);
+}
+
+function toggleCard(key: string) {
+  const next = new Set(cardsClosed.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  cardsClosed.value = next;
+}
 
 function fileKey(file: WorkingFile): string {
   return `${file.stage}:${file.path}`;
@@ -216,7 +230,7 @@ const groups = computed<GroupView[]>(() => {
       key: definition.key,
       label: definition.label,
       files,
-      rows: buildRows(definition.key, files, viewMode.value, collapsed.value),
+      rows: buildRows(definition.key, files, viewMode.value, folded.value),
       additions: files.reduce((sum, file) => sum + file.additions, 0),
       deletions: files.reduce((sum, file) => sum + file.deletions, 0),
       stage: definition.stage,
@@ -325,14 +339,14 @@ function selectDir(row: DirRow) {
 }
 
 function toggleFolder(row: DirRow) {
-  const next = new Set(collapsed.value);
+  const next = new Set(folded.value);
   if (next.has(row.key)) next.delete(row.key);
   else next.add(row.key);
-  collapsed.value = next;
+  folded.value = next;
 }
 
 function isCollapsed(row: DirRow): boolean {
-  return collapsed.value.has(row.key);
+  return folded.value.has(row.key);
 }
 
 function onRowClick(event: KeyboardEvent | MouseEvent, file: WorkingFile) {
@@ -479,11 +493,18 @@ function onMenuSelect(id: string) {
 <template>
   <div class="changes-panel">
     <div class="changes-head">
-      <div class="changes-heading">
+      <button
+        type="button"
+        class="changes-heading panel-collapse"
+        :aria-expanded="!collapsed"
+        :title="collapsed ? '展开变更' : '折叠变更'"
+        @click="emit('toggle-collapse')"
+      >
+        <Icon :name="collapsed ? 'chevron-right' : 'chevron-down'" :size="13" />
         <span class="section-label">变更</span>
         <span class="rail-count">{{ files.length }}</span>
         <span v-if="truncated" class="changes-truncated">仅显示前 {{ files.length }} 个</span>
-      </div>
+      </button>
       <div class="changes-head-actions">
         <button
           type="button"
@@ -508,6 +529,7 @@ function onMenuSelect(id: string) {
       </div>
     </div>
 
+    <template v-if="!collapsed">
     <div class="changes-tools">
       <label class="changes-filter">
         <Icon name="search" :size="13" />
@@ -561,10 +583,22 @@ function onMenuSelect(id: string) {
         v-for="group in groups"
         :key="group.key"
         class="change-card"
-        :class="`card-${group.key}`"
+        :class="[`card-${group.key}`, { 'is-collapsed': !isCardOpen(group.key) }]"
         :aria-label="`${group.label}文件`"
       >
         <header class="change-card-head">
+          <button
+            type="button"
+            class="card-chevron"
+            :aria-expanded="isCardOpen(group.key)"
+            :title="isCardOpen(group.key) ? `折叠${group.label}` : `展开${group.label}`"
+            @click.stop="toggleCard(group.key)"
+          >
+            <Icon
+              :name="isCardOpen(group.key) ? 'chevron-down' : 'chevron-right'"
+              :size="12"
+            />
+          </button>
           <label class="group-check" @click.stop>
             <input
               type="checkbox"
@@ -593,7 +627,7 @@ function onMenuSelect(id: string) {
           </button>
         </header>
 
-        <div class="change-card-body">
+        <div v-show="isCardOpen(group.key)" class="change-card-body">
           <div
             v-for="row in group.rows"
             :key="row.key"
@@ -757,6 +791,7 @@ function onMenuSelect(id: string) {
         </button>
       </div>
     </div>
+    </template>
 
     <CanvasMenu
       v-if="menu"

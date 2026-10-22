@@ -4177,8 +4177,52 @@ select.input,
   outline-offset: 2px;
 }
 
+.rail-section {
+  position: relative;
+}
+
 .rail-rows {
   animation: rail-rows-in 0.16s ease;
+}
+
+.rail-rows.is-sized {
+  overscroll-behavior: contain;
+}
+
+.rail-resize {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: -9px;
+  z-index: 1;
+  height: 12px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.rail-resize::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 6px;
+  height: 1px;
+  background: var(--line);
+  opacity: 0;
+  transition:
+    opacity 0.14s ease,
+    background-color 0.14s ease;
+}
+
+.rail-resize:hover::before,
+.rail-resize:focus-visible::before,
+body.is-resizing-rows .rail-resize::before {
+  background: rgba(31, 110, 106, 0.6);
+  opacity: 1;
+}
+
+.rail-resize:focus-visible {
+  outline: none;
 }
 
 @keyframes rail-rows-in {
@@ -5625,7 +5669,7 @@ button.ref:hover {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  padding: 14px 16px 12px;
+  padding: 4px 16px 12px;
   overflow-y: auto;
 }
 
@@ -5644,6 +5688,17 @@ button.ref:hover {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex: none;
+  padding: 12px 16px 8px;
+}
+
+.composer-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.composer.is-collapsed .composer-head {
+  padding-bottom: 12px;
 }
 
 .composer-head .section-label {
@@ -6146,6 +6201,37 @@ kbd {
   padding: 12px 12px 8px 16px;
 }
 
+.panel-collapse {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-collapse .icon {
+  flex: none;
+  color: var(--muted);
+  transition: color 0.14s ease;
+}
+
+.panel-collapse:hover .icon {
+  color: var(--teal-deep);
+}
+
+.panel-collapse:focus-visible {
+  border-radius: 5px;
+  outline: 2px solid rgba(31, 110, 106, 0.45);
+  outline-offset: 2px;
+}
+
 .changes-heading {
   display: flex;
   align-items: center;
@@ -6277,6 +6363,41 @@ kbd {
   padding: 4px 7px 4px 9px;
   border-bottom: 1px solid var(--line);
   background: rgba(245, 239, 227, 0.44);
+}
+
+.change-card.is-collapsed {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.change-card.is-collapsed .change-card-head {
+  border-bottom-color: transparent;
+}
+
+.card-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-left: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.card-chevron:hover {
+  background: rgba(32, 36, 31, 0.06);
+  color: var(--ink-soft);
+}
+
+.card-chevron:focus-visible {
+  outline: 2px solid rgba(31, 110, 106, 0.45);
+  outline-offset: 1px;
 }
 
 .group-check,
@@ -6608,18 +6729,84 @@ kbd {
   flex: 1;
 }
 
+.dossier-grip {
+  position: relative;
+  flex: none;
+  height: 11px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.dossier-grip::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 5px;
+  height: 1px;
+  background: var(--line);
+  transition:
+    background-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.dossier-grip:hover::before,
+.dossier-grip:focus-visible::before,
+.wip-dossier.is-resizing .dossier-grip::before {
+  background: var(--teal);
+  box-shadow: 0 0 0 1px rgba(31, 110, 106, 0.16);
+}
+
+.dossier-grip:focus-visible {
+  outline: none;
+}
+
 .wip-dossier-composer {
   display: flex;
   flex: 0 1 auto;
   min-height: 0;
   max-height: 62%;
-  border-top: 1px solid var(--line);
 }
 
 .wip-dossier-composer .composer {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.wip-dossier.is-split .wip-dossier-changes {
+  min-height: 0;
+}
+
+.wip-dossier.is-split .wip-dossier-composer {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
+.wip-dossier.changes-collapsed .wip-dossier-changes {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.wip-dossier.changes-collapsed .wip-dossier-composer {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
+.wip-dossier.composer-collapsed .wip-dossier-composer {
+  flex: 0 0 auto;
+  max-height: none;
+}
+
+.wip-dossier.changes-collapsed .wip-dossier-composer,
+.wip-dossier.composer-collapsed .wip-dossier-composer {
+  border-top: 1px solid var(--line);
+}
+
+body.is-resizing-rows,
+body.is-resizing-rows * {
+  cursor: row-resize !important;
+  user-select: none;
 }
 
 @media (max-height: 700px) {

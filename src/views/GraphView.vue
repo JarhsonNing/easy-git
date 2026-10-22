@@ -165,6 +165,155 @@ const dialog = ref<{
   run: (values: DialogValues) => Promise<void>;
 } | null>(null);
 
+const DOSSIER_PREFS_KEY = "easygit.dossier";
+const DOSSIER_MIN_CHANGES = 283;
+const DOSSIER_MIN_COMPOSER = 190;
+
+interface DossierPrefs {
+  changes?: boolean;
+  composer?: boolean;
+  ratio?: number;
+}
+
+function readDossierPrefs(): DossierPrefs {
+  try {
+    const raw = localStorage.getItem(DOSSIER_PREFS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const dossierPrefs = readDossierPrefs();
+const changesCollapsed = ref(Boolean(dossierPrefs.changes));
+const composerCollapsed = ref(Boolean(dossierPrefs.composer));
+const changesHeight = ref<number | null>(null);
+const dossierDragging = ref(false);
+const dossierRef = ref<HTMLElement | null>(null);
+let dossierRatio =
+  typeof dossierPrefs.ratio === "number" && Number.isFinite(dossierPrefs.ratio)
+    ? Math.min(0.8, Math.max(0.2, dossierPrefs.ratio))
+    : null;
+
+function persistDossierPrefs() {
+  const el = dossierRef.value;
+  if (changesHeight.value != null && el && el.clientHeight > 0) {
+    dossierRatio = changesHeight.value / el.clientHeight;
+  }
+  try {
+    localStorage.setItem(
+      DOSSIER_PREFS_KEY,
+      JSON.stringify({
+        changes: changesCollapsed.value,
+        composer: composerCollapsed.value,
+        ratio: dossierRatio,
+      }),
+    );
+  } catch {
+    // storage unavailable; keep the in-memory state
+  }
+}
+
+function clampDossierHeight(height: number): number {
+  const el = dossierRef.value;
+  if (!el) return Math.max(DOSSIER_MIN_CHANGES, height);
+  const gripHeight = el.querySelector<HTMLElement>(".dossier-grip")?.offsetHeight ?? 0;
+  const max = Math.max(
+    DOSSIER_MIN_CHANGES,
+    el.clientHeight - gripHeight - DOSSIER_MIN_COMPOSER,
+  );
+  return Math.min(max, Math.max(DOSSIER_MIN_CHANGES, Math.round(height)));
+}
+
+function currentChangesHeight(): number {
+  const el = dossierRef.value?.querySelector<HTMLElement>(".wip-dossier-changes");
+  return changesHeight.value ?? el?.getBoundingClientRect().height ?? DOSSIER_MIN_CHANGES;
+}
+
+function onDossierGripDown(event: PointerEvent) {
+  if (event.button !== 0) return;
+  const grip = event.currentTarget as HTMLElement;
+  event.preventDefault();
+  grip.setPointerCapture(event.pointerId);
+  dossierDragging.value = true;
+  document.body.classList.add("is-resizing-rows");
+  const startY = event.clientY;
+  const startHeight = currentChangesHeight();
+  const onMove = (moveEvent: PointerEvent) => {
+    changesHeight.value = clampDossierHeight(startHeight + moveEvent.clientY - startY);
+  };
+  const finish = (upEvent: PointerEvent) => {
+    grip.removeEventListener("pointermove", onMove);
+    grip.removeEventListener("pointerup", finish);
+    grip.removeEventListener("pointercancel", finish);
+    if (grip.hasPointerCapture(upEvent.pointerId)) grip.releasePointerCapture(upEvent.pointerId);
+    dossierDragging.value = false;
+    document.body.classList.remove("is-resizing-rows");
+    persistDossierPrefs();
+  };
+  grip.addEventListener("pointermove", onMove);
+  grip.addEventListener("pointerup", finish);
+  grip.addEventListener("pointercancel", finish);
+}
+
+function onDossierGripKey(event: KeyboardEvent) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  event.preventDefault();
+  const step = event.shiftKey ? 48 : 16;
+  const delta = event.key === "ArrowDown" ? step : -step;
+  changesHeight.value = clampDossierHeight(currentChangesHeight() + delta);
+  persistDossierPrefs();
+}
+
+function resetDossierSplit() {
+  changesHeight.value = null;
+  dossierRatio = null;
+  persistDossierPrefs();
+}
+
+async function toggleChangesCollapse() {
+  changesCollapsed.value = !changesCollapsed.value;
+  if (changesCollapsed.value) {
+    changesHeight.value = null;
+  } else {
+    await nextTick();
+    restoreDossierRatio();
+  }
+  persistDossierPrefs();
+}
+
+async function toggleComposerCollapse() {
+  composerCollapsed.value = !composerCollapsed.value;
+  if (composerCollapsed.value) {
+    changesHeight.value = null;
+  } else {
+    await nextTick();
+    restoreDossierRatio();
+  }
+  persistDossierPrefs();
+}
+
+function restoreDossierRatio() {
+  if (dossierRatio == null || changesCollapsed.value || composerCollapsed.value) return;
+  const height = dossierRef.value?.clientHeight;
+  if (height) changesHeight.value = clampDossierHeight(dossierRatio * height);
+}
+
+let dossierObserver: ResizeObserver | null = null;
+watch(dossierRef, (el) => {
+  dossierObserver?.disconnect();
+  dossierObserver = null;
+  if (!el) return;
+  dossierObserver = new ResizeObserver(() => {
+    if (changesHeight.value != null) {
+      changesHeight.value = clampDossierHeight(changesHeight.value);
+    }
+  });
+  dossierObserver.observe(el);
+  restoreDossierRatio();
+});
+
 const currentBranch = computed(() => refs.value?.local.find((branch) => branch.isCurrent) ?? null);
 const headLabel = computed(() => {
   if (status.value?.detached) {
@@ -2467,6 +2616,7 @@ watch(selectedFileKey, (key) => {
 
 onBeforeUnmount(() => {
   if (workspaceTimer !== undefined) window.clearTimeout(workspaceTimer);
+  dossierObserver?.disconnect();
 });
 
 function openDiscard(file: WorkingFile) {
@@ -3075,30 +3225,62 @@ function onWorkingToggleSelected() {
 
         <aside
           v-if="wipSelected"
+          ref="dossierRef"
           class="surface inspector wip-dossier"
+          :class="{
+            'changes-collapsed': changesCollapsed,
+            'composer-collapsed': composerCollapsed,
+            'is-split': changesHeight != null && !changesCollapsed && !composerCollapsed,
+            'is-resizing': dossierDragging,
+          }"
           aria-label="工作区变更与提交"
         >
-          <div class="wip-dossier-changes">
+          <div
+            class="wip-dossier-changes"
+            :style="
+              changesHeight != null && !changesCollapsed && !composerCollapsed
+                ? { flex: `0 0 ${changesHeight}px` }
+                : undefined
+            "
+          >
             <ChangesPanel
               :files="workingFiles"
               :selected="selectedFileKey"
               :truncated="filesTruncated"
               :loading="workspaceLoading"
               :disabled="!!operation"
+              :collapsed="changesCollapsed"
               @select="openWorkingFile"
               @stage-files="onStageFiles"
               @unstage-files="onUnstageFiles"
               @discard-files="openDiscardMany"
               @stash="openStash"
               @refresh="refreshWorkspace"
+              @toggle-collapse="toggleChangesCollapse"
             />
           </div>
+          <div
+            v-if="!changesCollapsed && !composerCollapsed"
+            class="dossier-grip"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="拖动调整变更与提交面板的高度"
+            :aria-valuemin="DOSSIER_MIN_CHANGES"
+            :aria-valuenow="Math.round(currentChangesHeight())"
+            tabindex="0"
+            title="拖动调整高度，双击恢复均分"
+            @pointerdown="onDossierGripDown"
+            @keydown="onDossierGripKey"
+            @dblclick="resetDossierSplit"
+          ></div>
           <div class="wip-dossier-composer">
             <CommitComposer
               :branch="headLabel"
               :can-push="(refs?.remotes.length ?? 0) > 0"
               :disabled="!!operation || !!dialog"
+              :collapsed="composerCollapsed"
               @push="openPushCurrent"
+              @toggle-collapse="toggleComposerCollapse"
             />
           </div>
         </aside>

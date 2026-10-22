@@ -23,10 +23,12 @@ const props = defineProps<{
   branch: string;
   canPush: boolean;
   disabled?: boolean;
+  collapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "push"): void;
+  (e: "toggle-collapse"): void;
 }>();
 
 const menu = ref<{ x: number; y: number } | null>(null);
@@ -105,6 +107,7 @@ async function onHistorySelect(id: string) {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (props.collapsed) return;
   if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
   event.preventDefault();
   void onCommit();
@@ -120,43 +123,52 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="composer">
-    <div class="composer-body">
-      <div class="composer-head">
+  <div class="composer" :class="{ 'is-collapsed': collapsed }">
+    <div class="composer-head">
+      <button
+        type="button"
+        class="composer-heading panel-collapse"
+        :aria-expanded="!collapsed"
+        :title="collapsed ? '展开提交' : '折叠提交'"
+        @click="emit('toggle-collapse')"
+      >
+        <Icon :name="collapsed ? 'chevron-right' : 'chevron-down'" :size="13" />
         <span class="section-label">
           {{ amend ? "改写最后一次提交" : `提交到 ${branch}` }}
         </span>
-        <div class="composer-head-actions">
-          <button
-            type="button"
-            class="button ghost tiny"
-            :disabled="disabled || !historyItems.length"
-            title="复用历史提交信息"
-            @click="openHistory"
-          >
-            <Icon name="clock" :size="13" />
-            历史
-          </button>
-          <button
-            type="button"
-            class="button ghost tiny"
-            :disabled="disabled || (!drafting && stagedCount === 0)"
-            :title="
-              drafting
-                ? '停止 AI 撰写'
-                : stagedCount
-                  ? '根据已暂存的差异撰写提交信息'
-                  : '请先暂存变更'
-            "
-            @click="onDraftClick"
-          >
-            <span v-if="drafting" class="loading-orbit" aria-hidden="true"></span>
-            <Icon v-else name="sparkles" :size="13" />
-            {{ drafting ? "停止" : "AI 写" }}
-          </button>
-        </div>
+      </button>
+      <div class="composer-head-actions">
+        <button
+          type="button"
+          class="button ghost tiny"
+          :disabled="disabled || !historyItems.length"
+          title="复用历史提交信息"
+          @click="openHistory"
+        >
+          <Icon name="clock" :size="13" />
+          历史
+        </button>
+        <button
+          type="button"
+          class="button ghost tiny"
+          :disabled="disabled || (!drafting && stagedCount === 0)"
+          :title="
+            drafting
+              ? '停止 AI 撰写'
+              : stagedCount
+                ? '根据已暂存的差异撰写提交信息'
+                : '请先暂存变更'
+          "
+          @click="onDraftClick"
+        >
+          <span v-if="drafting" class="loading-orbit" aria-hidden="true"></span>
+          <Icon v-else name="sparkles" :size="13" />
+          {{ drafting ? "停止" : "AI 写" }}
+        </button>
       </div>
+    </div>
 
+    <div v-show="!collapsed" class="composer-body">
       <label class="field">
         <span>摘要</span>
         <input
@@ -201,7 +213,7 @@ onBeforeUnmount(() => {
       <p v-else class="composer-identity">提交者：{{ identity }}</p>
     </div>
 
-    <div class="composer-foot">
+    <div v-show="!collapsed" class="composer-foot">
       <div class="composer-split">
         <button
           type="button"

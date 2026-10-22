@@ -56,6 +56,107 @@ function readCollapsed(): Partial<Record<RailSection, boolean>> {
 const collapsed = ref<Partial<Record<RailSection, boolean>>>(readCollapsed());
 const searchCollapsed = ref<Partial<Record<RailSection, boolean>>>({});
 
+const RAIL_HEIGHT_KEY = "easygit.rail-heights";
+const RAIL_MIN_HEIGHT = 72;
+
+function readHeights(): Partial<Record<RailSection, number>> {
+  try {
+    const raw = localStorage.getItem(RAIL_HEIGHT_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return {};
+    const result: Partial<Record<RailSection, number>> = {};
+    for (const section of ["remotes", "local", "remoteBranches", "tags", "stashes"] as RailSection[]) {
+      const value = (parsed as Record<string, unknown>)[section];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        result[section] = Math.max(RAIL_MIN_HEIGHT, Math.round(value));
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+const heights = ref<Partial<Record<RailSection, number>>>(readHeights());
+
+function rowsSized(section: RailSection): boolean {
+  return heights.value[section] != null && isOpen(section) && !needle.value;
+}
+
+function rowsStyle(section: RailSection): Record<string, string> | undefined {
+  if (!rowsSized(section)) return undefined;
+  return { height: `${heights.value[section]}px`, overflowY: "auto" };
+}
+
+function persistHeights() {
+  try {
+    localStorage.setItem(RAIL_HEIGHT_KEY, JSON.stringify(heights.value));
+  } catch {
+    // storage unavailable; keep the in-memory state
+  }
+}
+
+function clampRailHeight(height: number, scroll: HTMLElement | null): number {
+  const max = Math.max(RAIL_MIN_HEIGHT, (scroll?.clientHeight ?? 600) - 96);
+  return Math.min(max, Math.max(RAIL_MIN_HEIGHT, Math.round(height)));
+}
+
+function railRowsHeight(rows: HTMLElement | null): number {
+  return rows?.getBoundingClientRect().height ?? RAIL_MIN_HEIGHT;
+}
+
+function onRailGripDown(event: PointerEvent, section: RailSection) {
+  if (event.button !== 0) return;
+  const grip = event.currentTarget as HTMLElement;
+  const sectionEl = grip.closest(".rail-section");
+  const rows = sectionEl?.querySelector<HTMLElement>(".rail-rows") ?? null;
+  const scroll = grip.closest<HTMLElement>(".rail-scroll");
+  event.preventDefault();
+  grip.setPointerCapture(event.pointerId);
+  document.body.classList.add("is-resizing-rows");
+  const startY = event.clientY;
+  const startHeight = railRowsHeight(rows);
+  const onMove = (moveEvent: PointerEvent) => {
+    heights.value = {
+      ...heights.value,
+      [section]: clampRailHeight(startHeight + moveEvent.clientY - startY, scroll),
+    };
+  };
+  const finish = (upEvent: PointerEvent) => {
+    grip.removeEventListener("pointermove", onMove);
+    grip.removeEventListener("pointerup", finish);
+    grip.removeEventListener("pointercancel", finish);
+    if (grip.hasPointerCapture(upEvent.pointerId)) grip.releasePointerCapture(upEvent.pointerId);
+    document.body.classList.remove("is-resizing-rows");
+    persistHeights();
+  };
+  grip.addEventListener("pointermove", onMove);
+  grip.addEventListener("pointerup", finish);
+  grip.addEventListener("pointercancel", finish);
+}
+
+function onRailGripKey(event: KeyboardEvent, section: RailSection) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  event.preventDefault();
+  const grip = event.currentTarget as HTMLElement;
+  const rows = grip.closest(".rail-section")?.querySelector<HTMLElement>(".rail-rows") ?? null;
+  const scroll = grip.closest<HTMLElement>(".rail-scroll");
+  const step = event.shiftKey ? 48 : 16;
+  const delta = event.key === "ArrowDown" ? step : -step;
+  heights.value = {
+    ...heights.value,
+    [section]: clampRailHeight(railRowsHeight(rows) + delta, scroll),
+  };
+  persistHeights();
+}
+
+function resetRailHeight(section: RailSection) {
+  const next = { ...heights.value };
+  delete next[section];
+  heights.value = next;
+  persistHeights();
+}
+
 function isOpen(section: RailSection): boolean {
   return needle.value ? !searchCollapsed.value[section] : !collapsed.value[section];
 }
@@ -307,7 +408,13 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             </button>
           </span>
         </div>
-        <div v-show="isOpen('remotes')" id="rail-section-remotes" class="rail-rows">
+        <div
+          v-show="isOpen('remotes')"
+          id="rail-section-remotes"
+          class="rail-rows"
+          :class="{ 'is-sized': rowsSized('remotes') }"
+          :style="rowsStyle('remotes')"
+        >
           <div
             v-for="remote in remoteList"
             :key="`remote:${remote.name}`"
@@ -347,6 +454,20 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             还没有配置远程仓库
           </p>
         </div>
+        <div
+          v-if="isOpen('remotes') && remoteList.length"
+          class="rail-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整远程仓库列表高度"
+          :aria-valuemin="RAIL_MIN_HEIGHT"
+          :aria-valuenow="Math.round(heights.remotes ?? RAIL_MIN_HEIGHT)"
+          tabindex="0"
+          title="拖动调整高度，双击恢复"
+          @pointerdown="onRailGripDown($event, 'remotes')"
+          @keydown="onRailGripKey($event, 'remotes')"
+          @dblclick="resetRailHeight('remotes')"
+        ></div>
       </section>
 
       <section v-if="localBranches.length" class="rail-section">
@@ -367,7 +488,13 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
           </button>
           <span>{{ localBranches.length }}</span>
         </div>
-        <div v-show="isOpen('local')" id="rail-section-local" class="rail-rows">
+        <div
+          v-show="isOpen('local')"
+          id="rail-section-local"
+          class="rail-rows"
+          :class="{ 'is-sized': rowsSized('local') }"
+          :style="rowsStyle('local')"
+        >
           <div
             v-for="branch in localBranches"
             :key="keyOf(branch.kind, branch.name)"
@@ -416,6 +543,20 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             </button>
           </div>
         </div>
+        <div
+          v-if="isOpen('local') && localBranches.length"
+          class="rail-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整本地分支列表高度"
+          :aria-valuemin="RAIL_MIN_HEIGHT"
+          :aria-valuenow="Math.round(heights.local ?? RAIL_MIN_HEIGHT)"
+          tabindex="0"
+          title="拖动调整高度，双击恢复"
+          @pointerdown="onRailGripDown($event, 'local')"
+          @keydown="onRailGripKey($event, 'local')"
+          @dblclick="resetRailHeight('local')"
+        ></div>
       </section>
 
       <section v-if="remoteBranches.length" class="rail-section">
@@ -436,7 +577,13 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
           </button>
           <span>{{ remoteBranches.length }}</span>
         </div>
-        <div v-show="isOpen('remoteBranches')" id="rail-section-remote-branches" class="rail-rows">
+        <div
+          v-show="isOpen('remoteBranches')"
+          id="rail-section-remote-branches"
+          class="rail-rows"
+          :class="{ 'is-sized': rowsSized('remoteBranches') }"
+          :style="rowsStyle('remoteBranches')"
+        >
           <div
             v-for="branch in remoteBranches"
             :key="keyOf(branch.kind, branch.name)"
@@ -474,6 +621,20 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             </button>
           </div>
         </div>
+        <div
+          v-if="isOpen('remoteBranches') && remoteBranches.length"
+          class="rail-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整远程分支列表高度"
+          :aria-valuemin="RAIL_MIN_HEIGHT"
+          :aria-valuenow="Math.round(heights.remoteBranches ?? RAIL_MIN_HEIGHT)"
+          tabindex="0"
+          title="拖动调整高度，双击恢复"
+          @pointerdown="onRailGripDown($event, 'remoteBranches')"
+          @keydown="onRailGripKey($event, 'remoteBranches')"
+          @dblclick="resetRailHeight('remoteBranches')"
+        ></div>
       </section>
 
       <section v-if="tags.length" class="rail-section">
@@ -494,7 +655,13 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
           </button>
           <span>{{ tags.length }}</span>
         </div>
-        <div v-show="isOpen('tags')" id="rail-section-tags" class="rail-rows">
+        <div
+          v-show="isOpen('tags')"
+          id="rail-section-tags"
+          class="rail-rows"
+          :class="{ 'is-sized': rowsSized('tags') }"
+          :style="rowsStyle('tags')"
+        >
           <div
             v-for="tag in tags"
             :key="`tag:${tag.name}`"
@@ -523,6 +690,20 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             </button>
           </div>
         </div>
+        <div
+          v-if="isOpen('tags') && tags.length"
+          class="rail-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整标签列表高度"
+          :aria-valuemin="RAIL_MIN_HEIGHT"
+          :aria-valuenow="Math.round(heights.tags ?? RAIL_MIN_HEIGHT)"
+          tabindex="0"
+          title="拖动调整高度，双击恢复"
+          @pointerdown="onRailGripDown($event, 'tags')"
+          @keydown="onRailGripKey($event, 'tags')"
+          @dblclick="resetRailHeight('tags')"
+        ></div>
       </section>
 
       <section class="rail-section">
@@ -555,7 +736,13 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             </button>
           </span>
         </div>
-        <div v-show="isOpen('stashes')" id="rail-section-stashes" class="rail-rows">
+        <div
+          v-show="isOpen('stashes')"
+          id="rail-section-stashes"
+          class="rail-rows"
+          :class="{ 'is-sized': rowsSized('stashes') }"
+          :style="rowsStyle('stashes')"
+        >
           <div
             v-for="stash in stashList"
             :key="stash.reference"
@@ -588,6 +775,20 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             {{ query.trim() ? "没有匹配的贮藏" : "没有贮藏" }}
           </p>
         </div>
+        <div
+          v-if="isOpen('stashes') && stashList.length"
+          class="rail-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整贮藏列表高度"
+          :aria-valuemin="RAIL_MIN_HEIGHT"
+          :aria-valuenow="Math.round(heights.stashes ?? RAIL_MIN_HEIGHT)"
+          tabindex="0"
+          title="拖动调整高度，双击恢复"
+          @pointerdown="onRailGripDown($event, 'stashes')"
+          @keydown="onRailGripKey($event, 'stashes')"
+          @dblclick="resetRailHeight('stashes')"
+        ></div>
       </section>
 
       <p v-if="!visibleTotal && (total || remotes?.length)" class="rail-empty">
