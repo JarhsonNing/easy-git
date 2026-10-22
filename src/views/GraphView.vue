@@ -2660,6 +2660,42 @@ async function refreshAll() {
   await Promise.all([refreshRepo(), refreshWorkspace()]);
 }
 
+const AUTO_FETCH_INTERVAL = 120_000;
+let autoFetchTimer: number | undefined;
+let autoFetching = false;
+
+function canAutoFetch(): boolean {
+  return (
+    !!session.value &&
+    !loading.value &&
+    !operation.value &&
+    !workspaceLoading.value
+  );
+}
+
+// GitKraken 式后台抓取：定时与窗口聚焦时静默更新，不打扰当前操作。
+async function autoFetch() {
+  if (autoFetching || !canAutoFetch()) return;
+  autoFetching = true;
+  try {
+    await fetchGitRemote(null);
+    if (canAutoFetch()) await refreshAll();
+  } catch {
+    // 离线或凭据缺失时静默跳过
+  } finally {
+    autoFetching = false;
+  }
+}
+
+function onWindowVisible() {
+  if (document.visibilityState === "visible") void autoFetch();
+}
+
+onMounted(() => {
+  autoFetchTimer = window.setInterval(() => void autoFetch(), AUTO_FETCH_INTERVAL);
+  document.addEventListener("visibilitychange", onWindowVisible);
+});
+
 function openPushCurrent() {
   if (currentBranch.value) openPush(currentBranch.value);
 }
@@ -2741,6 +2777,8 @@ watch(selectedFileKey, (key) => {
 
 onBeforeUnmount(() => {
   if (workspaceTimer !== undefined) window.clearTimeout(workspaceTimer);
+  if (autoFetchTimer !== undefined) window.clearInterval(autoFetchTimer);
+  document.removeEventListener("visibilitychange", onWindowVisible);
   dossierObserver?.disconnect();
 });
 

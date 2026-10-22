@@ -304,6 +304,143 @@ pub(crate) fn finish(
     })
 }
 
+pub(crate) const AUTOSTASH_MESSAGE: &str = "easy-git 自动贮藏";
+
+fn stash_top(dir: &Path) -> Result<Option<String>, String> {
+    let top = run_git(dir, &["rev-parse", "--verify", "--quiet", "refs/stash"])?;
+    let hash = top.text.trim().to_string();
+    Ok((top.ok && !hash.is_empty()).then_some(hash))
+}
+
+/// GitKraken-style auto-stash: hide the dirty worktree before an operation and
+/// put the changes back afterwards. Returns the saved stash commit hash.
+pub(crate) fn autostash_push(dir: &Path) -> Result<Option<String>, String> {
+    let status = run_git(dir, &["status", "--porcelain"])?;
+    if !status.ok {
+        return Err(if status.text.is_empty() {
+            "无法读取仓库状态".to_string()
+        } else {
+            status.text
+        });
+    }
+    if status.text.trim().is_empty() {
+        return Ok(None);
+    }
+    let push = run_git(
+        dir,
+        &["stash", "push", "--include-untracked", "-m", AUTOSTASH_MESSAGE],
+    )?;
+    if !push.ok {
+        return Err(if push.text.is_empty() {
+            "无法自动贮藏本地改动".to_string()
+        } else {
+            push.text
+        });
+    }
+    stash_top(dir)
+}
+
+pub(crate) enum StashRestore {
+    Nothing,
+    Restored,
+    ConflictKept,
+    Kept,
+}
+
+/// Pop only when our stash is still on top of the stack; anything else means
+/// the user touched the stash meanwhile and we must not reorder it.
+pub(crate) fn autostash_pop(dir: &Path, saved: &Option<String>) -> Result<StashRestore, String> {
+    let Some(reference) = saved.as_deref() else {
+        return Ok(StashRestore::Nothing);
+    };
+    let Some(top) = stash_top(dir)? else {
+        return Ok(StashRestore::Kept);
+    };
+    if !top.eq_ignore_ascii_case(reference) {
+        return Ok(StashRestore::Kept);
+    }
+    let pop = run_git(dir, &["stash", "pop", "stash@{0}"])?;
+    Ok(if pop.ok {
+        StashRestore::Restored
+    } else {
+        // A conflicted pop keeps the stash entry on the stack.
+        StashRestore::ConflictKept
+    })
+}
+
+fn autostash_note(restore: StashRestore) -> Option<&'static str> {
+    match restore {
+        StashRestore::Nothing => None,
+        StashRestore::Restored => Some("，已恢复贮藏的本地改动"),
+        StashRestore::ConflictKept => Some("，恢复贮藏的改动时冲突，改动保留在贮藏中"),
+        StashRestore::Kept => Some("，本地改动保留在贮藏中"),
+    }
+}
+
+fn finish_checkout(
+    store: &RepoStore,
+    dir: &Path,
+    saved: &Option<String>,
+    outcome: GitOutput,
+    success: String,
+) -> Result<OperationResult, String> {
+    if !outcome.ok {
+        // The checkout failed atomically, so we are still on the original
+        // branch and the stash can go straight back.
+        let _ = autostash_pop(dir, saved);
+        return finish(store, outcome, success, false);
+    }
+    let mut message = success;
+    if let Some(note) = autostash_note(autostash_pop(dir, saved)?) {
+        message.push_str(note);
+    }
+    finish(store, outcome, message, false)
+}
+
+fn finish_with_autostash(
+    store: &RepoStore,
+    dir: &Path,
+    saved: &Option<String>,
+    outcome: GitOutput,
+    success: String,
+) -> Result<OperationResult, String> {
+    match finish(store, outcome, success, true) {
+        Ok(mut result) => {
+            if result.state == "clean" && result.conflicts.is_empty() {
+                if let Some(note) = autostash_note(autostash_pop(dir, saved)?) {
+                    result.message.push_str(note);
+                }
+            } else {
+                // Mid-operation conflicts: leave the changes safely stashed.
+                result.message.push_str("，本地改动已保存在贮藏中");
+            }
+            Ok(result)
+        }
+        Err(error) => match autostash_pop(dir, saved)? {
+            StashRestore::Nothing | StashRestore::Restored => Err(error),
+            _ => Err(format!("{error}（本地改动保留在贮藏中）")),
+        },
+    }
+}
+
+/// After a conflict is continued or aborted, put the user's stashed changes
+/// back — but only when the top stash entry was created by autostash.
+fn restore_autostash_if_ours(dir: &Path) -> Result<Option<&'static str>, String> {
+    let Some(hash) = stash_top(dir)? else {
+        return Ok(None);
+    };
+    let subject = run_git(dir, &["log", "-1", "--format=%s", hash.as_str()])?;
+    if !(subject.ok && subject.text.trim().ends_with(AUTOSTASH_MESSAGE)) {
+        return Ok(None);
+    }
+    let pop = run_git(dir, &["stash", "pop", "stash@{0}"])?;
+    Ok(if pop.ok {
+        Some("，已恢复贮藏的本地改动")
+    } else {
+        Some("，恢复贮藏的改动时冲突，改动保留在贮藏中")
+    })
+}
+
 #[tauri::command]
 pub fn checkout_branch(
     store: State<'_, RepoStore>,
@@ -313,6 +450,7 @@ pub fn checkout_branch(
     let _guard = lock_ops(&store)?;
     ensure_no_operation(&store)?;
     let dir = workdir(&store)?;
+    let saved = autostash_push(&dir)?;
 
     if kind == "remote" {
         validate_branch_name(&dir, &name).map_err(|_| format!("远程分支「{name}」名称异常"))?;
@@ -322,6 +460,7 @@ pub fn checkout_branch(
             &["rev-parse", "--verify", "--quiet", reference.as_str()],
         )?;
         if !exists.ok {
+            let _ = autostash_pop(&dir, &saved);
             return Err(format!("远程分支「{name}」不存在"));
         }
         let local = name
@@ -336,19 +475,27 @@ pub fn checkout_branch(
             &["rev-parse", "--verify", "--quiet", local_reference.as_str()],
         )?;
         if local_exists.ok {
+            let _ = autostash_pop(&dir, &saved);
             return Err(format!("本地已存在分支「{local}」，请直接切换该分支"));
         }
         let outcome = run_git(&dir, &["checkout", "-b", local, "--track", name.as_str()])?;
-        finish(
+        finish_checkout(
             &store,
+            &dir,
+            &saved,
             outcome,
             format!("已基于 {name} 创建并切换到 {local}"),
-            false,
         )
     } else {
         ensure_local_branch(&dir, &name)?;
         let outcome = run_git(&dir, &["checkout", name.as_str()])?;
-        finish(&store, outcome, format!("已切换到分支 {name}"), false)
+        finish_checkout(
+            &store,
+            &dir,
+            &saved,
+            outcome,
+            format!("已切换到分支 {name}"),
+        )
     }
 }
 
@@ -362,13 +509,15 @@ pub fn checkout_commit(
     ensure_oid(&oid)?;
     let dir = workdir(&store)?;
     let target = resolve_commit(&dir, &oid, "提交")?;
+    let saved = autostash_push(&dir)?;
     let outcome = run_git(&dir, &["checkout", "--detach", target.as_str()])?;
     let short: String = target.chars().take(7).collect();
-    finish(
+    finish_checkout(
         &store,
+        &dir,
+        &saved,
         outcome,
         format!("已切换到提交 {short}（分离 HEAD）"),
-        false,
     )
 }
 
@@ -396,17 +545,19 @@ pub fn create_branch(
         None => resolve_commit(&dir, "HEAD", "当前提交")?,
     };
 
-    let outcome = if checkout {
-        run_git(&dir, &["checkout", "-b", name.as_str(), start.as_str()])?
-    } else {
-        run_git(&dir, &["branch", name.as_str(), start.as_str()])?
-    };
-    let success = if checkout {
-        format!("已创建并切换到分支 {name}")
-    } else {
-        format!("已创建分支 {name}")
-    };
-    finish(&store, outcome, success, false)
+    if checkout {
+        let saved = autostash_push(&dir)?;
+        let outcome = run_git(&dir, &["checkout", "-b", name.as_str(), start.as_str()])?;
+        return finish_checkout(
+            &store,
+            &dir,
+            &saved,
+            outcome,
+            format!("已创建并切换到分支 {name}"),
+        );
+    }
+    let outcome = run_git(&dir, &["branch", name.as_str(), start.as_str()])?;
+    finish(&store, outcome, format!("已创建分支 {name}"), false)
 }
 
 #[tauri::command]
@@ -476,9 +627,11 @@ pub fn merge_branch(
         return Err("不能将分支合并到它自己".to_string());
     }
     resolve_commit(&dir, &source, "来源")?;
+    let saved = autostash_push(&dir)?;
 
     let checkout = run_git(&dir, &["checkout", target.as_str()])?;
     if !checkout.ok {
+        let _ = autostash_pop(&dir, &saved);
         return Err(checkout.text);
     }
 
@@ -487,11 +640,12 @@ pub fn merge_branch(
     } else {
         run_git(&dir, &["merge", "--no-edit", source.as_str()])?
     };
-    finish(
+    finish_with_autostash(
         &store,
+        &dir,
+        &saved,
         outcome,
         format!("已将 {source} 合并到 {target}"),
-        true,
     )
 }
 
@@ -506,17 +660,20 @@ pub fn rebase_branch(
     let dir = workdir(&store)?;
     ensure_local_branch(&dir, &source)?;
     let target = resolve_commit(&dir, &onto, "目标")?;
+    let saved = autostash_push(&dir)?;
 
     let checkout = run_git(&dir, &["checkout", source.as_str()])?;
     if !checkout.ok {
+        let _ = autostash_pop(&dir, &saved);
         return Err(checkout.text);
     }
     let outcome = run_git(&dir, &["rebase", target.as_str()])?;
-    finish(
+    finish_with_autostash(
         &store,
+        &dir,
+        &saved,
         outcome,
         format!("已将 {source} 变基到 {onto}"),
-        true,
     )
 }
 
@@ -532,10 +689,12 @@ pub fn cherry_pick(
     let dir = workdir(&store)?;
     let commit = resolve_commit(&dir, &oid, "提交")?;
     let target_name = target.filter(|value| !value.trim().is_empty());
+    let saved = autostash_push(&dir)?;
     if let Some(name) = target_name.as_deref() {
         ensure_local_branch(&dir, name)?;
         let checkout = run_git(&dir, &["checkout", name])?;
         if !checkout.ok {
+            let _ = autostash_pop(&dir, &saved);
             return Err(checkout.text);
         }
     }
@@ -545,7 +704,7 @@ pub fn cherry_pick(
         Some(name) => format!("已将提交 {short} 拣选到 {name}"),
         None => format!("已拣选提交 {short}"),
     };
-    finish(&store, outcome, success, true)
+    finish_with_autostash(&store, &dir, &saved, outcome, success)
 }
 
 #[tauri::command]
@@ -572,10 +731,12 @@ pub fn cherry_pick_many(
         }
     }
     let target_name = target.filter(|value| !value.trim().is_empty());
+    let saved = autostash_push(&dir)?;
     if let Some(name) = target_name.as_deref() {
         ensure_local_branch(&dir, name)?;
         let checkout = run_git(&dir, &["checkout", name])?;
         if !checkout.ok {
+            let _ = autostash_pop(&dir, &saved);
             return Err(checkout.text);
         }
     }
@@ -586,7 +747,7 @@ pub fn cherry_pick_many(
         Some(name) => format!("已将 {} 个提交拣选到 {name}", commits.len()),
         None => format!("已拣选 {} 个提交", commits.len()),
     };
-    finish(&store, outcome, success, true)
+    finish_with_autostash(&store, &dir, &saved, outcome, success)
 }
 
 #[tauri::command]
@@ -596,9 +757,16 @@ pub fn revert_commit(store: State<'_, RepoStore>, oid: String) -> Result<Operati
     ensure_oid(&oid)?;
     let dir = workdir(&store)?;
     let commit = resolve_commit(&dir, &oid, "提交")?;
+    let saved = autostash_push(&dir)?;
     let outcome = run_git(&dir, &["revert", "--no-edit", commit.as_str()])?;
     let short: String = commit.chars().take(7).collect();
-    finish(&store, outcome, format!("已还原提交 {short}"), true)
+    finish_with_autostash(
+        &store,
+        &dir,
+        &saved,
+        outcome,
+        format!("已还原提交 {short}"),
+    )
 }
 
 #[tauri::command]
@@ -912,13 +1080,13 @@ pub fn pull_branch(
         (Some(remote), Some(branch)) => {
             ensure_remote(&store, remote)?;
             validate_branch_name(&dir, branch)?;
-            run_git(&dir, &["pull", "--no-edit", remote, branch])?
+            run_git(&dir, &["pull", "--no-edit", "--autostash", remote, branch])?
         }
         (Some(remote), None) => {
             ensure_remote(&store, remote)?;
-            run_git(&dir, &["pull", "--no-edit", remote])?
+            run_git(&dir, &["pull", "--no-edit", "--autostash", remote])?
         }
-        _ => run_git(&dir, &["pull", "--no-edit"])?,
+        _ => run_git(&dir, &["pull", "--no-edit", "--autostash"])?,
     };
     let target = branch.unwrap_or(status.branch);
     finish(&store, outcome, format!("已拉取 {target} 的最新提交"), true)
@@ -975,7 +1143,13 @@ pub fn continue_operation(
         _ => return Err("未知的待继续操作".to_string()),
     };
     let outcome = run_git(&dir, &args)?;
-    finish(&store, outcome, success, conflict_capable)
+    let mut result = finish(&store, outcome, success, conflict_capable)?;
+    if result.state == "clean" && result.conflicts.is_empty() {
+        if let Some(note) = restore_autostash_if_ours(&dir)? {
+            result.message.push_str(note);
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -993,7 +1167,11 @@ pub fn abort_operation(
         _ => return Err("未知的待中止操作".to_string()),
     };
     let outcome = run_git(&dir, &args)?;
-    finish(&store, outcome, success, false)
+    let mut result = finish(&store, outcome, success, false)?;
+    if let Some(note) = restore_autostash_if_ours(&dir)? {
+        result.message.push_str(note);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
