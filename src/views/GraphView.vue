@@ -23,9 +23,11 @@ import {
   deleteTag as deleteGitTag,
   diffCommits as diffGitCommits,
   errorText,
+  fastForwardTag as fastForwardGitTag,
   fetchRemote as fetchGitRemote,
   getCommitDiff,
   mergeBranch as mergeGitBranches,
+  mergeIntoTag as mergeIntoGitTag,
   pruneRemote as pruneGitRemote,
   pullBranch as pullGitBranch,
   pushBranch as pushGitBranch,
@@ -333,6 +335,12 @@ const dragHint = computed(() => {
     return target
       ? `松开：把 ${source.shortId} 拣选到 ${target}`
       : `把 ${source.shortId} 拖到本地分支上拣选`;
+  }
+  if (source.type === "tag") {
+    const target = dropLabel.value ?? railTarget.value?.name;
+    return target
+      ? `松开：${source.tag.name} → ${target}，选择快进或合并`
+      : `把标签 ${source.tag.name} 拖到本地分支上`;
   }
   const target = dropTarget.value;
   if (target?.startsWith("commit:")) {
@@ -1253,6 +1261,28 @@ function onBranchDragStart(branch: BranchInfo) {
   menu.value = null;
 }
 
+function onTagDragStart(tag: TagInfo) {
+  dragSource.value = { type: "tag", tag };
+  dropTarget.value = null;
+  dropLabel.value = null;
+  railTarget.value = null;
+  menu.value = null;
+}
+
+function onTagRefDragStart(event: DragEvent, tag: TagInfo) {
+  event.stopPropagation();
+  if (operation.value) {
+    event.preventDefault();
+    return;
+  }
+  onTagDragStart(tag);
+  setDragGhost(event, tag.name, "tag");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `tag:${tag.name}`);
+  }
+}
+
 function onRowDragStart(event: DragEvent, row: CommitRow) {
   if (operation.value) {
     event.preventDefault();
@@ -1292,6 +1322,15 @@ function onRefDragStart(event: DragEvent, branch: BranchInfo) {
 }
 
 function refDragStart(event: DragEvent, label: RefLabel) {
+  if (label.kind === "tag") {
+    const tag = tagForRef(label);
+    if (!tag) {
+      event.preventDefault();
+      return;
+    }
+    onTagRefDragStart(event, tag);
+    return;
+  }
   const branch = branchForRef(label);
   if (!branch) {
     event.preventDefault();
@@ -1322,6 +1361,14 @@ function onBranchDragOver(event: DragEvent, branch: BranchInfo) {
   if (!source || operation.value) return;
   const key = `branch:${branch.kind}:${branch.name}`;
   if (source.type === "commit") {
+    if (branch.kind !== "local") {
+      if (dropTarget.value === key) {
+        dropTarget.value = null;
+        dropLabel.value = null;
+      }
+      return;
+    }
+  } else if (source.type === "tag") {
     if (branch.kind !== "local") {
       if (dropTarget.value === key) {
         dropTarget.value = null;
@@ -1410,6 +1457,36 @@ function handleBranchDrop(branch: BranchInfo, x: number, y: number) {
         },
       ],
       () => openCherryPick(source.oid, source.shortId, branch.name),
+    );
+    return;
+  }
+  if (source.type === "tag") {
+    if (branch.kind !== "local") {
+      setNotice({ tone: "error", message: "请把标签拖到本地分支上。" });
+      return;
+    }
+    openDropMenu(
+      x,
+      y,
+      `${source.tag.name} → ${branch.name}`,
+      [
+        {
+          id: "fast-forward-tag",
+          label: `Fast-forward ${source.tag.name} to ${branch.name}`,
+          hint: "把标签快进到分支的最新提交",
+          icon: "arrow-right",
+        },
+        {
+          id: "merge-into-tag",
+          label: `Merge ${branch.name} into ${source.tag.name}`,
+          hint: "创建合并提交并把标签移动到合并结果",
+          icon: "git-merge",
+        },
+      ],
+      (id) => {
+        if (id === "fast-forward-tag") openTagFastForward(source.tag, branch);
+        else if (id === "merge-into-tag") openTagMerge(source.tag, branch);
+      },
     );
     return;
   }
@@ -1520,7 +1597,11 @@ function onRailBranchDrop(payload: { branch: BranchInfo; x: number; y: number })
 
 function isDragSource(label: RefLabel): boolean {
   const source = dragSource.value;
-  if (!source || source.type !== "branch") return false;
+  if (!source) return false;
+  if (label.kind === "tag") {
+    return source.type === "tag" && label.name === source.tag.name;
+  }
+  if (source.type !== "branch") return false;
   const branch = branchForRef(label);
   return (
     !!branch && branch.kind === source.branch.kind && branch.name === source.branch.name
@@ -2178,6 +2259,50 @@ function openMerge(source: BranchInfo, target: string) {
       await runOperation("正在合并分支…", () =>
         mergeGitBranches(source.name, target, boolValue(values, "noFf")),
       );
+    },
+  );
+}
+
+function openTagFastForward(tag: TagInfo, branch: BranchInfo) {
+  showDialog(
+    {
+      title: "快进标签",
+      description: `把标签 ${tag.name} 移动到 ${branch.name} 的最新提交。只有标签提交是 ${branch.name} 的祖先时才能快进。`,
+      confirmLabel: "快进标签",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "warning",
+          text: "标签引用会被移动，已经推送到远端的标签需要强制推送才能更新。",
+          danger: true,
+        },
+      ],
+    },
+    async () => {
+      await runOperation("正在快进标签…", () => fastForwardGitTag(tag.name, branch.name));
+    },
+  );
+}
+
+function openTagMerge(tag: TagInfo, branch: BranchInfo) {
+  showDialog(
+    {
+      title: "合并到标签",
+      description: `把 ${branch.name} 合并进标签 ${tag.name}，并将标签移动到合并后的提交。`,
+      confirmLabel: "合并并移动标签",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "warning",
+          text: "合并会在临时工作区完成，不会切换当前分支；已经推送的标签需要强制推送才能更新。",
+          danger: true,
+        },
+      ],
+    },
+    async () => {
+      await runOperation("正在合并到标签…", () => mergeIntoGitTag(tag.name, branch.name));
     },
   );
 }
@@ -2879,7 +3004,9 @@ function onWorkingToggleSelected() {
             dragSource
               ? dragSource.type === 'commit'
                 ? 'commit'
-                : dragSource.branch.kind
+                : dragSource.type === 'tag'
+                  ? 'tag'
+                  : dragSource.branch.kind
               : null
           "
           :class="{ 'rail-open': railOpen }"
@@ -2894,6 +3021,7 @@ function onWorkingToggleSelected() {
           @create="openCreateBranch()"
           @fetch="fetchAll"
           @drag-start="onBranchDragStart"
+          @tag-drag-start="onTagDragStart"
           @drag-over="onRailDragOver"
           @drag-end="resetDrag"
           @drop-branch="onRailBranchDrop"
@@ -3078,7 +3206,10 @@ function onWorkingToggleSelected() {
                         ]"
                         :title="refTitle(label)"
                         :draggable="
-                          !operation && (label.kind === 'branch' || label.kind === 'remote')
+                          !operation &&
+                          (label.kind === 'branch' ||
+                            label.kind === 'remote' ||
+                            label.kind === 'tag')
                         "
                         @click.stop="onRefClick(row, label)"
                         @dblclick.stop="onRefDoubleClick(label)"
@@ -3168,7 +3299,13 @@ function onWorkingToggleSelected() {
             aria-hidden="true"
           >
             <Icon
-              :name="dragSource.type === 'branch' ? 'git-merge' : 'commit'"
+              :name="
+                dragSource.type === 'branch'
+                  ? 'git-merge'
+                  : dragSource.type === 'tag'
+                    ? 'tag'
+                    : 'commit'
+              "
               :size="14"
             />
             {{ dragHint }}

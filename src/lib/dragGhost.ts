@@ -1,4 +1,4 @@
-type DragTone = "branch" | "remote" | "commit";
+type DragTone = "branch" | "remote" | "commit" | "tag";
 
 export function setDragGhost(event: DragEvent, text: string, tone: DragTone): void {
   const transfer = event.dataTransfer;

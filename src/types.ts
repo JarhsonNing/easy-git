@@ -439,6 +439,7 @@ export type DialogValues = Record<string, string | boolean>;
 
 export type CanvasDragSource =
   | { type: "branch"; branch: BranchInfo }
+  | { type: "tag"; tag: TagInfo }
   | { type: "commit"; oid: string; shortId: string; summary: string };
 
 export type ChatRole = "system" | "user" | "assistant";

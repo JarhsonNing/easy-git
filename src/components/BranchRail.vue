@@ -11,7 +11,7 @@ const props = defineProps<{
   selectedStash?: string | null;
   remotes?: RemoteInfo[];
   disabled?: boolean;
-  dragKind?: "commit" | BranchKind | null;
+  dragKind?: "commit" | BranchKind | "tag" | null;
 }>();
 
 const emit = defineEmits<{
@@ -26,6 +26,7 @@ const emit = defineEmits<{
   (e: "create"): void;
   (e: "fetch"): void;
   (e: "drag-start", branch: BranchInfo): void;
+  (e: "tag-drag-start", tag: TagInfo): void;
   (e: "drag-over", branch: BranchInfo | null): void;
   (e: "drag-end"): void;
   (e: "drop-branch", payload: { branch: BranchInfo; x: number; y: number }): void;
@@ -35,7 +36,8 @@ const emit = defineEmits<{
 
 const query = ref("");
 const dropKey = ref<string | null>(null);
-const dragged = ref<BranchInfo | null>(null);
+type RailDrag = { type: "branch"; branch: BranchInfo } | { type: "tag"; tag: TagInfo };
+const dragged = ref<RailDrag | null>(null);
 
 const needle = computed(() => query.value.trim().toLowerCase());
 
@@ -237,13 +239,28 @@ function onDragStart(event: DragEvent, branch: BranchInfo) {
     return;
   }
   dropKey.value = null;
-  dragged.value = branch;
+  dragged.value = { type: "branch", branch };
   setDragGhost(event, branch.name, branch.kind === "remote" ? "remote" : "branch");
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", `${branch.kind}:${branch.name}`);
   }
   emit("drag-start", branch);
+}
+
+function onTagDragStart(event: DragEvent, tag: TagInfo) {
+  if (props.disabled) {
+    event.preventDefault();
+    return;
+  }
+  dropKey.value = null;
+  dragged.value = { type: "tag", tag };
+  setDragGhost(event, tag.name, "tag");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `tag:${tag.name}`);
+  }
+  emit("tag-drag-start", tag);
 }
 
 function onDragEnd() {
@@ -255,14 +272,23 @@ function onDragEnd() {
 
 function onDragOver(event: DragEvent, branch: BranchInfo) {
   if (props.disabled) return;
-  const kind = dragged.value?.kind ?? props.dragKind ?? null;
-  const name = dragged.value?.name ?? null;
-  if (kind === "commit" && branch.kind !== "local") {
+  const current = dragged.value;
+  const kind = current
+    ? current.type === "tag"
+      ? "tag"
+      : current.branch.kind
+    : props.dragKind ?? null;
+  const name = current
+    ? current.type === "tag"
+      ? current.tag.name
+      : current.branch.name
+    : null;
+  if ((kind === "commit" || kind === "tag") && branch.kind !== "local") {
     dropKey.value = null;
     emit("drag-over", null);
     return;
   }
-  if (kind === branch.kind && name === branch.name) {
+  if (kind !== "tag" && kind === branch.kind && name === branch.name) {
     dropKey.value = null;
     emit("drag-over", null);
     return;
@@ -670,9 +696,12 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
             <button
               type="button"
               class="rail-item"
+              :draggable="!disabled"
               :title="tag.name"
               @click="$emit('select-tag', tag)"
               @contextmenu="openMenu($event, { tag })"
+              @dragstart="onTagDragStart($event, tag)"
+              @dragend="onDragEnd"
             >
               <span class="rail-tag-icon" aria-hidden="true">
                 <Icon name="tag" :size="12" />
@@ -799,7 +828,7 @@ function openRemoteMore(event: MouseEvent, remote: RemoteInfo) {
 
     <p class="rail-hint">
       <Icon name="branch" :size="13" />
-      拖拽分支到分支或提交上开始操作，也可以右键。
+      拖拽分支或标签到分支上开始操作，也可以右键。
     </p>
   </aside>
 </template>

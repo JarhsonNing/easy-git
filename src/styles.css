@@ -4669,6 +4669,17 @@ button.ref:hover {
   background: var(--ochre);
 }
 
+.drag-ghost.tone-tag {
+  border-color: rgba(180, 122, 44, 0.36);
+  color: var(--ochre-deep);
+}
+
+.drag-ghost.tone-tag .drag-ghost-dot {
+  border-radius: 1px;
+  background: var(--ochre);
+  transform: rotate(45deg);
+}
+
 @keyframes hint-rise {
   from {
     opacity: 0;

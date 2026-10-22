@@ -40,6 +40,8 @@ pub fn run() {
             commands::branch::reset_branch,
             commands::branch::create_tag,
             commands::branch::delete_tag,
+            commands::branch::fast_forward_tag,
+            commands::branch::merge_into_tag,
             commands::branch::fetch_remote,
             commands::branch::pull_branch,
             commands::branch::push_branch,

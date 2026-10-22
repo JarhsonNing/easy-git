@@ -681,6 +681,178 @@ pub fn create_tag(
     finish(&store, outcome, format!("已创建标签 {name}"), false)
 }
 
+fn move_tag(dir: &Path, name: &str, target: &str) -> Result<GitOutput, String> {
+    let reference = format!("refs/tags/{name}");
+    let kind = run_git(dir, &["cat-file", "-t", reference.as_str()])?;
+    if kind.ok && kind.text.trim() == "tag" {
+        // Raw output keeps long tag messages intact; run_git would clip them.
+        let message = run_git_raw(
+            dir,
+            &["for-each-ref", "--format=%(contents)", reference.as_str()],
+        )?;
+        if !message.ok {
+            return Ok(GitOutput {
+                ok: false,
+                text: message.error,
+            });
+        }
+        let message = message.stdout.trim_end().to_string();
+        run_git(
+            dir,
+            &["tag", "-f", "-a", name, "-m", message.as_str(), target],
+        )
+    } else {
+        run_git(dir, &["tag", "-f", name, target])
+    }
+}
+
+#[tauri::command]
+pub fn fast_forward_tag(
+    store: State<'_, RepoStore>,
+    name: String,
+    target: String,
+) -> Result<OperationResult, String> {
+    let _guard = lock_ops(&store)?;
+    let dir = workdir(&store)?;
+    validate_tag_name(&dir, &name)?;
+    let reference = format!("refs/tags/{name}");
+    if !run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", reference.as_str()],
+    )?
+    .ok
+    {
+        return Err(format!("标签「{name}」不存在"));
+    }
+    let tag_commit = resolve_commit(&dir, &reference, "标签")?;
+    ensure_local_branch(&dir, &target)?;
+    let target_ref = format!("refs/heads/{target}");
+    let target_commit = resolve_commit(&dir, &target_ref, "目标")?;
+    if tag_commit == target_commit {
+        return Err(format!("标签 {name} 已经指向 {target}，无需快进"));
+    }
+    let ancestor = run_git(
+        &dir,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            tag_commit.as_str(),
+            target_commit.as_str(),
+        ],
+    )?;
+    if !ancestor.ok {
+        return Err(format!(
+            "无法快进标签 {name}：它不是 {target} 的祖先，请改用合并。"
+        ));
+    }
+    let outcome = move_tag(&dir, &name, target_commit.as_str())?;
+    let short: String = target_commit.chars().take(7).collect();
+    finish(
+        &store,
+        outcome,
+        format!("已将标签 {name} 快进到 {target}（{short}）"),
+        false,
+    )
+}
+
+#[tauri::command]
+pub fn merge_into_tag(
+    store: State<'_, RepoStore>,
+    name: String,
+    source: String,
+) -> Result<OperationResult, String> {
+    let _guard = lock_ops(&store)?;
+    ensure_no_operation(&store)?;
+    let dir = workdir(&store)?;
+    validate_tag_name(&dir, &name)?;
+    let reference = format!("refs/tags/{name}");
+    if !run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", reference.as_str()],
+    )?
+    .ok
+    {
+        return Err(format!("标签「{name}」不存在"));
+    }
+    let tag_commit = resolve_commit(&dir, &reference, "标签")?;
+    ensure_local_branch(&dir, &source)?;
+    let source_ref = format!("refs/heads/{source}");
+    let source_commit = resolve_commit(&dir, &source_ref, "来源")?;
+    if tag_commit == source_commit {
+        return Err(format!("{source} 与标签 {name} 指向同一提交"));
+    }
+
+    // The merge runs in a throwaway worktree so the user's checkout and index stay untouched.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let worktree =
+        std::env::temp_dir().join(format!("easy-git-tag-merge-{}-{stamp}", std::process::id()));
+    let worktree_arg = worktree.to_string_lossy().into_owned();
+
+    let added = run_git(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree_arg.as_str(),
+            tag_commit.as_str(),
+        ],
+    )?;
+    if !added.ok {
+        let _ = std::fs::remove_dir_all(&worktree);
+        return Err(added.text);
+    }
+
+    let merge_message = format!("Merge {source} into {name}");
+    let merged = run_git(
+        &worktree,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            merge_message.as_str(),
+            source_ref.as_str(),
+        ],
+    )?;
+    if !merged.ok {
+        let _ = run_git(&worktree, &["merge", "--abort"]);
+        let _ = run_git(
+            &dir,
+            &["worktree", "remove", "--force", worktree_arg.as_str()],
+        );
+        let _ = std::fs::remove_dir_all(&worktree);
+        return Err(if merged.text.is_empty() {
+            format!("无法把 {source} 合并进标签 {name}")
+        } else {
+            merged.text
+        });
+    }
+
+    let head = run_git(&worktree, &["rev-parse", "HEAD"])?;
+    let merge_commit = head
+        .text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.len() == 40 && line.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_string);
+    let _ = run_git(
+        &dir,
+        &["worktree", "remove", "--force", worktree_arg.as_str()],
+    );
+    let merge_commit = merge_commit.ok_or_else(|| "无法读取合并后的提交".to_string())?;
+    let outcome = move_tag(&dir, &name, merge_commit.as_str())?;
+    let short: String = merge_commit.chars().take(7).collect();
+    finish(
+        &store,
+        outcome,
+        format!("已将 {source} 合并进标签 {name}（{short}）"),
+        false,
+    )
+}
+
 #[tauri::command]
 pub fn delete_tag(store: State<'_, RepoStore>, name: String) -> Result<OperationResult, String> {
     let _guard = lock_ops(&store)?;

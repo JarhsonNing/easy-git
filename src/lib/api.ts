@@ -183,6 +183,14 @@ export function deleteTag(name: string): Promise<OperationResult> {
   return invoke<OperationResult>("delete_tag", { name });
 }
 
+export function fastForwardTag(name: string, target: string): Promise<OperationResult> {
+  return invoke<OperationResult>("fast_forward_tag", { name, target });
+}
+
+export function mergeIntoTag(name: string, source: string): Promise<OperationResult> {
+  return invoke<OperationResult>("merge_into_tag", { name, source });
+}
+
 export function fetchRemote(remote: string | null): Promise<OperationResult> {
   return invoke<OperationResult>("fetch_remote", { remote });
 }
