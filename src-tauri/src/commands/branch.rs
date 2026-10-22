@@ -2,6 +2,9 @@ use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use tauri::State;
 
 use super::repo::{
@@ -9,6 +12,10 @@ use super::repo::{
 };
 
 pub(crate) const OUTPUT_LIMIT: usize = 6_000;
+
+/// CREATE_NO_WINDOW: the GUI has no console, so Git must not allocate one.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(crate) struct GitOutput {
     pub(crate) ok: bool,
@@ -104,6 +111,8 @@ fn base_command(dir: &Path, args: &[&str]) -> Command {
         .env("GIT_MERGE_AUTOEDIT", "no")
         .env("GIT_PAGER", "cat")
         .env("GCM_INTERACTIVE", "Never");
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
     command
 }
 
