@@ -4221,6 +4221,10 @@ body.is-resizing-rows .rail-resize::before {
   opacity: 1;
 }
 
+.rail-section:hover .rail-resize:not(:hover):not(:focus-visible)::before {
+  opacity: 0.5;
+}
+
 .rail-resize:focus-visible {
   outline: none;
 }
