@@ -7,12 +7,16 @@ import {
   commitIdentity,
   discardFiles,
   errorText,
+  getConflictFile,
   getFileDiff,
   getCommit,
   getRepoStatus,
   getWorkingDiff,
   getWorkingFiles,
   listStashes,
+  markConflictResolved as markConflictResolvedGit,
+  resolveConflictVersion as resolveConflictGit,
+  saveConflictResult,
   stageAll as stageAllGit,
   stageFiles,
   stashApply,
@@ -31,6 +35,7 @@ import {
 } from "./repo";
 import type {
   ChatMessage,
+  ConflictFile,
   FileDiff,
   OperationResult,
   StashEntry,
@@ -45,6 +50,9 @@ export const stashes = ref<StashEntry[]>([]);
 export const selected = ref<{ path: string; stage: WorkingStage } | null>(null);
 export const fileDiff = ref<FileDiff | null>(null);
 export const diffLoading = ref(false);
+export const conflictFile = ref<ConflictFile | null>(null);
+export const conflictLoading = ref(false);
+export const conflictError = ref("");
 export const workspaceLoading = ref(false);
 export const workspaceError = ref("");
 export const summary = ref("");
@@ -93,11 +101,39 @@ export function targetsOf(selection: WorkingFile[]): WorkingTarget[] {
   }));
 }
 
+async function loadConflict(path: string | null): Promise<void> {
+  const request = ++diffRequest;
+  conflictFile.value = null;
+  conflictError.value = "";
+  if (!path) {
+    conflictLoading.value = false;
+    return;
+  }
+  conflictLoading.value = true;
+  try {
+    const result = await getConflictFile(path);
+    if (request === diffRequest) conflictFile.value = result;
+  } catch (e) {
+    if (request === diffRequest) conflictError.value = errorText(e);
+  } finally {
+    if (request === diffRequest) conflictLoading.value = false;
+  }
+}
+
 async function loadDiff(path: string | null, stage: WorkingStage | null): Promise<void> {
   const request = ++diffRequest;
-  if (!path || !stage || stage === "conflicted") {
+  conflictFile.value = null;
+  conflictLoading.value = false;
+  conflictError.value = "";
+  if (!path || !stage) {
     fileDiff.value = null;
     diffLoading.value = false;
+    return;
+  }
+  if (stage === "conflicted") {
+    fileDiff.value = null;
+    diffLoading.value = false;
+    await loadConflict(path);
     return;
   }
   diffLoading.value = true;
@@ -175,6 +211,9 @@ export function resetWorkspace() {
   selected.value = null;
   fileDiff.value = null;
   diffLoading.value = false;
+  conflictFile.value = null;
+  conflictLoading.value = false;
+  conflictError.value = "";
   workspaceLoading.value = false;
   workspaceError.value = "";
   summary.value = "";
@@ -212,9 +251,35 @@ function runWorkspace(
 }
 
 export function stageFile(file: WorkingFile): Promise<boolean> {
-  const label =
-    file.stage === "conflicted" ? "正在标记为已解决…" : `正在暂存 ${file.path}…`;
-  return runWorkspace(label, () => stageFiles(targetsOf([file])));
+  if (file.stage === "conflicted") return markConflicted(file.path);
+  return runWorkspace(`正在暂存 ${file.path}…`, () => stageFiles(targetsOf([file])));
+}
+
+function markConflicted(path: string): Promise<boolean> {
+  return runWorkspace("正在标记为已解决…", () => markConflictResolvedGit(path));
+}
+
+export function saveConflictMerge(content: string): Promise<boolean> {
+  const current = selected.value;
+  if (!current) return Promise.resolve(false);
+  return runWorkspace("正在保存合并结果…", () =>
+    saveConflictResult(current.path, content),
+  );
+}
+
+export function adoptConflictSide(side: "ours" | "theirs"): Promise<boolean> {
+  const current = selected.value;
+  if (!current) return Promise.resolve(false);
+  return runWorkspace(
+    side === "ours" ? "正在采用当前版本…" : "正在采用传入版本…",
+    () => resolveConflictGit(current.path, side),
+  );
+}
+
+export function markConflictResolved(): Promise<boolean> {
+  const current = selected.value;
+  if (!current) return Promise.resolve(false);
+  return markConflicted(current.path);
 }
 
 export function unstageFile(file: WorkingFile): Promise<boolean> {

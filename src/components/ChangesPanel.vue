@@ -248,7 +248,9 @@ const checkedFiles = computed(() =>
 );
 
 const stageable = computed(() =>
-  checkedFiles.value.filter((file) => file.stage !== "staged"),
+  checkedFiles.value.filter(
+    (file) => file.stage === "unstaged" || file.stage === "untracked",
+  ),
 );
 
 const unstageable = computed(() =>
@@ -368,7 +370,8 @@ function onRowClick(event: KeyboardEvent | MouseEvent, file: WorkingFile) {
 
 function toggleFile(file: WorkingFile) {
   if (props.disabled) return;
-  if (file.stage === "staged") emit("unstage-files", [file]);
+  if (file.stage === "conflicted") emit("select", file);
+  else if (file.stage === "staged") emit("unstage-files", [file]);
   else emit("stage-files", [file]);
 }
 
@@ -379,17 +382,22 @@ function discardFile(file: WorkingFile) {
 
 function stageGroup(group: GroupView) {
   if (props.disabled) return;
+  if (group.key === "conflicts") {
+    const first = group.files[0];
+    if (first) emit("select", first);
+    return;
+  }
   if (group.stage === "staged") emit("unstage-files", group.files);
   else emit("stage-files", group.files);
 }
 
 function cardActionLabel(group: GroupView): string {
-  if (group.key === "conflicts") return "全部解决";
+  if (group.key === "conflicts") return "逐个合并";
   return group.stage === "staged" ? "取消暂存" : "全部暂存";
 }
 
 function cardActionIcon(group: GroupView): string {
-  if (group.key === "conflicts") return "check";
+  if (group.key === "conflicts") return "git-merge";
   return group.stage === "staged" ? "minus" : "plus";
 }
 
@@ -401,13 +409,13 @@ function cardEmptyText(group: GroupView): string {
 
 function rowToggleLabel(file: WorkingFile): string {
   if (file.stage === "staged") return "取消暂存";
-  if (file.stage === "conflicted") return "解决";
+  if (file.stage === "conflicted") return "合并";
   return "暂存";
 }
 
 function rowToggleTitle(file: WorkingFile): string {
   if (file.stage === "staged") return "取消暂存";
-  if (file.stage === "conflicted") return "标记为已解决";
+  if (file.stage === "conflicted") return "打开三方合并编辑器";
   return "暂存文件";
 }
 
@@ -720,7 +728,7 @@ function onMenuSelect(id: string) {
                       row.file.stage === 'staged'
                         ? 'minus'
                         : row.file.stage === 'conflicted'
-                          ? 'check'
+                          ? 'git-merge'
                           : 'plus'
                     "
                     :size="12"

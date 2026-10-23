@@ -8,6 +8,7 @@ import ActionDialog from "../components/ActionDialog.vue";
 import CommitComposer from "../components/CommitComposer.vue";
 import CommitDiffView from "../components/CommitDiffView.vue";
 import ChangesPanel from "../components/ChangesPanel.vue";
+import MergeConflictEditor from "../components/MergeConflictEditor.vue";
 import WorkingDiff from "../components/WorkingDiff.vue";
 import {
   abortOperation as abortGitOperation,
@@ -79,8 +80,12 @@ import { navigate } from "../stores/ui";
 import { requestCreateMergeRequest } from "../stores/mr";
 import { setDragGhost } from "../lib/dragGhost";
 import {
+  adoptConflictSide,
   applyHunkByIndex,
   applyStash,
+  conflictError,
+  conflictFile,
+  conflictLoading,
   diffLoading,
   discardFile,
   discardMany,
@@ -88,10 +93,12 @@ import {
   files as workingFiles,
   filesTruncated,
   fileDiff,
+  markConflictResolved,
   refreshWorkspace,
   removeStash,
   resetWorkspace,
   reuseCommitMessage,
+  saveConflictMerge,
   selectFile,
   selected as selectedFileKey,
   stageMany,
@@ -3062,6 +3069,43 @@ function onWorkingDiscard() {
 function onWorkingToggleSelected() {
   if (selectedFile.value) void toggleFile(selectedFile.value);
 }
+
+function onConflictReload() {
+  if (selectedFile.value) void selectFile(selectedFile.value);
+}
+
+async function onConflictSave(content: string) {
+  await saveConflictMerge(content);
+}
+
+function onConflictAdoptSide(side: "ours" | "theirs") {
+  const file = selectedFile.value;
+  if (!file) return;
+  const label = side === "ours" ? "采用当前版本" : "采用传入版本";
+  showDialog(
+    {
+      title: label,
+      description: `把 ${file.path} 整个替换成所选一侧的版本，未保存的合并结果会一起丢失。`,
+      confirmLabel: label,
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          text: "只影响这个文件，采用后会暂存并标记为已解决。",
+          danger: true,
+        },
+      ],
+    },
+    async () => {
+      await adoptConflictSide(side);
+    },
+  );
+}
+
+function onConflictMarkResolved() {
+  void markConflictResolved();
+}
 </script>
 
 <template>
@@ -3540,6 +3584,21 @@ function onWorkingToggleSelected() {
             {{ dragHint }}
           </div>
         </section>
+
+        <MergeConflictEditor
+          v-else-if="centerMode === 'working' && selectedFile?.stage === 'conflicted'"
+          :file="selectedFile"
+          :conflict="conflictFile"
+          :loading="conflictLoading"
+          :error="conflictError"
+          :disabled="!!operation"
+          back-label="图谱"
+          @back="resetCenter"
+          @reload="onConflictReload"
+          @save="onConflictSave"
+          @adopt-side="onConflictAdoptSide"
+          @mark-resolved="onConflictMarkResolved"
+        />
 
         <WorkingDiff
           v-else-if="centerMode === 'working'"

@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod branch;
+pub mod conflict;
 pub mod gitlab;
 pub mod gitlab_projects;
 pub mod remote;

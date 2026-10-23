@@ -11,6 +11,7 @@ import type {
   CommitOutcome,
   CommitPage,
   CommitPatch,
+  ConflictFile,
   FileDiff,
   GitLabBranch,
   GitLabFileContent,
@@ -286,6 +287,28 @@ export function getWorkingFiles(): Promise<WorkingFiles> {
 
 export function getFileDiff(path: string, stage: WorkingStage): Promise<FileDiff> {
   return invoke<FileDiff>("get_file_diff", { path, stage });
+}
+
+export function getConflictFile(path: string): Promise<ConflictFile> {
+  return invoke<ConflictFile>("get_conflict", { path });
+}
+
+export function saveConflictResult(
+  path: string,
+  content: string,
+): Promise<OperationResult> {
+  return invoke<OperationResult>("save_conflict", { path, content });
+}
+
+export function resolveConflictVersion(
+  path: string,
+  side: "ours" | "theirs",
+): Promise<OperationResult> {
+  return invoke<OperationResult>("resolve_conflict_side", { path, side });
+}
+
+export function markConflictResolved(path: string): Promise<OperationResult> {
+  return invoke<OperationResult>("mark_conflict_resolved", { path });
 }
 
 export function getCommitDiff(oid: string): Promise<CommitDiff> {

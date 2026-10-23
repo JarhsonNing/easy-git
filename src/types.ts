@@ -515,6 +515,39 @@ export interface FileDiff {
   hunks: Hunk[];
 }
 
+export interface ConflictBlock {
+  kind: "text" | "conflict";
+  text: string;
+  index: number;
+  ours: string;
+  theirs: string;
+  base: string | null;
+  oursLabel: string;
+  theirsLabel: string;
+}
+
+export type ConflictFallback = "binary" | "tooLarge" | "missing";
+
+export interface ConflictFile {
+  path: string;
+  state: string;
+  editable: boolean;
+  reason: ConflictFallback | null;
+  hasMarkers: boolean;
+  truncated: boolean;
+  newline: "lf" | "crlf";
+  finalNewline: boolean;
+  conflictCount: number;
+  blocks: ConflictBlock[];
+  base: string | null;
+  ours: string | null;
+  theirs: string | null;
+  basePresent: boolean;
+  oursPresent: boolean;
+  theirsPresent: boolean;
+  referenceTruncated: boolean;
+}
+
 export interface CommitFileDiff {
   path: string;
   oldPath: string | null;
