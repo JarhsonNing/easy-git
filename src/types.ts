@@ -573,6 +573,29 @@ export interface StashEntry {
   date: string;
 }
 
+export type RebaseAction = "pick" | "reword" | "squash" | "fixup" | "drop";
+
+export interface RebaseCommit {
+  oid: string;
+  shortId: string;
+  subject: string;
+  message: string;
+  author: string;
+  authoredAt: number;
+}
+
+export interface RebasePlan {
+  branch: string;
+  base: RebaseCommit;
+  commits: RebaseCommit[];
+}
+
+export interface RebaseStep {
+  oid: string;
+  action: RebaseAction;
+  message?: string;
+}
+
 export interface CommitOutcome {
   message: string;
   output: string;

@@ -1,10 +1,14 @@
+use std::collections::HashSet;
+use std::fs;
 use std::io::{ErrorKind, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::repo::{
@@ -410,7 +414,7 @@ fn finish_with_autostash(
                 if let Some(note) = autostash_note(autostash_pop(dir, saved)?) {
                     result.message.push_str(note);
                 }
-            } else {
+            } else if saved.is_some() {
                 // Mid-operation conflicts: leave the changes safely stashed.
                 result.message.push_str("，本地改动已保存在贮藏中");
             }
@@ -716,6 +720,334 @@ pub fn rebase_branch(
         outcome,
         format!("已将 {source} 变基到 {onto}"),
     )
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseCommit {
+    oid: String,
+    short_id: String,
+    subject: String,
+    message: String,
+    author: String,
+    authored_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebasePlan {
+    branch: String,
+    base: RebaseCommit,
+    commits: Vec<RebaseCommit>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseStep {
+    oid: String,
+    action: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+const REBASE_LIMIT: usize = 100;
+const REBASE_MESSAGE_LIMIT: usize = 10_000;
+
+fn parse_rebase_log(text: &str) -> Result<Vec<RebaseCommit>, String> {
+    let mut commits = Vec::new();
+    for record in text.split('\u{1e}') {
+        let record = record.trim_start_matches('\n');
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(6, '\u{1f}');
+        let oid = parts.next().unwrap_or("").trim().to_string();
+        let short_id = parts.next().unwrap_or("").trim().to_string();
+        let author = parts.next().unwrap_or("").trim().to_string();
+        let authored_at = parts.next().unwrap_or("0").trim().parse::<i64>().unwrap_or(0);
+        let subject = parts.next().unwrap_or("").trim().to_string();
+        let message = parts.next().unwrap_or("").trim_end().to_string();
+        if oid.len() != 40 || !oid.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err("无法解析提交列表".to_string());
+        }
+        commits.push(RebaseCommit {
+            oid,
+            short_id,
+            subject,
+            message,
+            author,
+            authored_at,
+        });
+    }
+    Ok(commits)
+}
+
+fn rebase_range(dir: &Path, range: &str) -> Result<Vec<RebaseCommit>, String> {
+    let outcome = run_git(
+        dir,
+        &[
+            "log",
+            "--reverse",
+            "--first-parent",
+            "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s%x1f%B%x1e",
+            range,
+        ],
+    )?;
+    if !outcome.ok {
+        return Err(if outcome.text.is_empty() {
+            "无法读取提交列表".to_string()
+        } else {
+            outcome.text
+        });
+    }
+    parse_rebase_log(&outcome.text)
+}
+
+fn rebase_commit(dir: &Path, oid: &str) -> Result<RebaseCommit, String> {
+    let outcome = run_git(
+        dir,
+        &[
+            "show",
+            "-s",
+            "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s%x1f%B",
+            oid,
+        ],
+    )?;
+    if !outcome.ok {
+        return Err(if outcome.text.is_empty() {
+            "无法读取起点提交".to_string()
+        } else {
+            outcome.text
+        });
+    }
+    let mut commits = parse_rebase_log(&format!("{}\u{1e}", outcome.text))?;
+    commits.pop().ok_or_else(|| "无法读取起点提交".to_string())
+}
+
+fn ensure_ancestor(dir: &Path, base: &str, tip: &str, label: &str) -> Result<(), String> {
+    let outcome = run_git(dir, &["merge-base", "--is-ancestor", base, tip])?;
+    if !outcome.ok {
+        return Err(format!("起点不在{label}的历史上"));
+    }
+    Ok(())
+}
+
+fn ensure_rebase_range(dir: &Path, base: &str, branch: &str) -> Result<(), String> {
+    let range = format!("{base}..{branch}");
+    let merges = run_git(dir, &["rev-list", "--merges", range.as_str()])?;
+    if !merges.ok {
+        return Err(if merges.text.is_empty() {
+            "无法读取提交范围".to_string()
+        } else {
+            merges.text
+        });
+    }
+    if !merges.text.trim().is_empty() {
+        return Err("这段历史里有合并提交，交互式变基暂不支持，请改用普通变基".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn interactive_rebase_plan(
+    store: State<'_, RepoStore>,
+    branch: String,
+    base: String,
+) -> Result<RebasePlan, String> {
+    let dir = workdir(&store)?;
+    ensure_local_branch(&dir, &branch)?;
+    let base_oid = resolve_commit(&dir, &base, "起点")?;
+    let branch_oid = resolve_commit(&dir, &branch, "分支")?;
+    ensure_ancestor(&dir, &base_oid, &branch_oid, &branch)?;
+    ensure_rebase_range(&dir, &base_oid, &branch_oid)?;
+    let commits = rebase_range(&dir, &format!("{base_oid}..{branch_oid}"))?;
+    if commits.is_empty() {
+        return Err("这个起点之后没有可整理的提交".to_string());
+    }
+    if commits.len() > REBASE_LIMIT {
+        return Err(format!("一次最多整理 {REBASE_LIMIT} 个提交"));
+    }
+    let base_commit = rebase_commit(&dir, &base_oid)?;
+    Ok(RebasePlan {
+        branch,
+        base: base_commit,
+        commits,
+    })
+}
+
+struct RebaseTemp {
+    path: PathBuf,
+}
+
+impl RebaseTemp {
+    fn new() -> Result<Self, String> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let path =
+            std::env::temp_dir().join(format!("easy-git-rebase-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).map_err(|error| format!("无法创建临时目录: {error}"))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for RebaseTemp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn shell_quote(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let text = if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    };
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn rebase_message_dir(dir: &Path) -> Result<PathBuf, String> {
+    let outcome = run_git(dir, &["rev-parse", "--absolute-git-dir"])?;
+    let text = outcome.text.trim();
+    if !outcome.ok || text.is_empty() {
+        return Err(if text.is_empty() {
+            "无法定位 Git 目录".to_string()
+        } else {
+            outcome.text
+        });
+    }
+    Ok(PathBuf::from(text).join("easy-git-rebase"))
+}
+
+fn clear_rebase_messages(dir: &Path) {
+    if let Ok(path) = rebase_message_dir(dir) {
+        let _ = fs::remove_dir_all(path);
+    }
+}
+
+#[tauri::command]
+pub fn interactive_rebase(
+    store: State<'_, RepoStore>,
+    branch: String,
+    base: String,
+    steps: Vec<RebaseStep>,
+) -> Result<OperationResult, String> {
+    if steps.is_empty() {
+        return Err("没有要执行的变基步骤".to_string());
+    }
+    if steps.len() > REBASE_LIMIT {
+        return Err(format!("一次最多整理 {REBASE_LIMIT} 个提交"));
+    }
+    let _guard = lock_ops(&store)?;
+    ensure_no_operation(&store)?;
+    let dir = workdir(&store)?;
+    ensure_local_branch(&dir, &branch)?;
+    let base_oid = resolve_commit(&dir, &base, "起点")?;
+    let branch_oid = resolve_commit(&dir, &branch, "分支")?;
+    ensure_ancestor(&dir, &base_oid, &branch_oid, &branch)?;
+    ensure_rebase_range(&dir, &base_oid, &branch_oid)?;
+
+    let expected = rebase_range(&dir, &format!("{base_oid}..{branch_oid}"))?;
+    if expected.is_empty() {
+        return Err("这个起点之后没有可整理的提交".to_string());
+    }
+    if expected.len() > REBASE_LIMIT {
+        return Err(format!("一次最多整理 {REBASE_LIMIT} 个提交"));
+    }
+
+    let temp = RebaseTemp::new()?;
+    let message_dir = rebase_message_dir(&dir)?;
+    if message_dir.exists() {
+        fs::remove_dir_all(&message_dir)
+            .map_err(|error| format!("无法清理旧的变基说明: {error}"))?;
+    }
+    fs::create_dir_all(&message_dir).map_err(|error| format!("无法创建变基说明目录: {error}"))?;
+    let mut seen = HashSet::new();
+    let mut todo = String::new();
+    let mut kept = false;
+    for (index, step) in steps.iter().enumerate() {
+        let oid = resolve_commit(&dir, &step.oid, "提交")?;
+        if !seen.insert(oid.clone()) {
+            return Err("提交列表里有重复项".to_string());
+        }
+        match step.action.as_str() {
+            "pick" | "reword" | "squash" | "fixup" | "drop" => {}
+            other => return Err(format!("未知的变基动作：{other}")),
+        }
+        if !kept && matches!(step.action.as_str(), "squash" | "fixup") {
+            return Err("第一个保留的提交不能压缩或并入".to_string());
+        }
+        if step.action != "drop" {
+            kept = true;
+        }
+        if step.action == "reword" {
+            let raw = step.message.as_deref().unwrap_or("");
+            if raw.trim().is_empty() {
+                return Err("改写后的提交说明不能为空".to_string());
+            }
+            if raw.chars().count() > REBASE_MESSAGE_LIMIT {
+                return Err("改写后的提交说明太长".to_string());
+            }
+            if raw.contains('\0') {
+                return Err("改写后的提交说明包含非法字符".to_string());
+            }
+            let path = message_dir.join(format!("msg-{index}.txt"));
+            fs::write(&path, format!("{}\n", raw.trim_end()))
+                .map_err(|error| format!("无法写入提交说明: {error}"))?;
+            todo.push_str(&format!("pick {oid}\n"));
+            todo.push_str(&format!(
+                "exec git commit --amend --quiet --cleanup=verbatim -F {}\n",
+                shell_quote(&path)
+            ));
+        } else {
+            todo.push_str(&format!("{} {oid}\n", step.action));
+        }
+    }
+    if !kept {
+        return Err("至少要保留一个提交".to_string());
+    }
+    let expected_set: HashSet<String> = expected.iter().map(|commit| commit.oid.clone()).collect();
+    if expected_set != seen {
+        return Err("提交列表与仓库历史不一致，请重新打开对话框".to_string());
+    }
+
+    let todo_path = temp.path.join("todo.txt");
+    fs::write(&todo_path, todo).map_err(|error| format!("无法写入变基计划: {error}"))?;
+    let saved = autostash_push(&dir)?;
+    let mut command = base_command(
+        &dir,
+        &[
+            "rebase",
+            "--interactive",
+            "--empty=keep",
+            base_oid.as_str(),
+            branch.as_str(),
+        ],
+    );
+    command.env(
+        "GIT_SEQUENCE_EDITOR",
+        format!("cp {}", shell_quote(&todo_path)),
+    );
+    let outcome = match command.output() {
+        Ok(output) => collect(output),
+        Err(error) => {
+            let _ = autostash_pop(&dir, &saved);
+            return Err(not_found_hint(&error));
+        }
+    };
+    let result = finish_with_autostash(
+        &store,
+        &dir,
+        &saved,
+        outcome,
+        format!("已按计划重写 {branch} 的 {} 个提交", expected.len()),
+    )?;
+    if result.state == "clean" && result.conflicts.is_empty() {
+        clear_rebase_messages(&dir);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1250,6 +1582,9 @@ pub fn continue_operation(
         if let Some(note) = restore_autostash_if_ours(&dir)? {
             result.message.push_str(note);
         }
+        if kind == "rebase" {
+            clear_rebase_messages(&dir);
+        }
     }
     Ok(result)
 }
@@ -1272,6 +1607,9 @@ pub fn abort_operation(
     let mut result = finish(&store, outcome, success, false)?;
     if let Some(note) = restore_autostash_if_ours(&dir)? {
         result.message.push_str(note);
+    }
+    if kind == "rebase" {
+        clear_rebase_messages(&dir);
     }
     Ok(result)
 }
@@ -1316,5 +1654,23 @@ mod tests {
         assert!(ensure_oid("abc1234").is_ok());
         assert!(ensure_oid("-abc1234").is_err());
         assert!(ensure_oid("not-a-sha").is_err());
+    }
+
+    #[test]
+    fn parses_rebase_log_with_bodies() {
+        let first = format!(
+            "{}\u{1f}abc1234\u{1f}Ann\u{1f}1700000000\u{1f}subject one\u{1f}subject one\n\nbody line\n\u{1e}",
+            "a".repeat(40)
+        );
+        let second = format!(
+            "\n{}\u{1f}def5678\u{1f}Bo\u{1f}1700000100\u{1f}subject two\u{1f}subject two\u{1e}\n",
+            "b".repeat(40)
+        );
+        let commits = parse_rebase_log(&format!("{first}{second}")).unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].short_id, "abc1234");
+        assert_eq!(commits[0].message, "subject one\n\nbody line");
+        assert_eq!(commits[1].subject, "subject two");
+        assert_eq!(commits[1].authored_at, 1_700_000_100);
     }
 }

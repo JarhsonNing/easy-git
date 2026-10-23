@@ -8,6 +8,7 @@ import ActionDialog from "../components/ActionDialog.vue";
 import CommitComposer from "../components/CommitComposer.vue";
 import CommitDiffView from "../components/CommitDiffView.vue";
 import ChangesPanel from "../components/ChangesPanel.vue";
+import InteractiveRebaseDialog from "../components/InteractiveRebaseDialog.vue";
 import MergeConflictEditor from "../components/MergeConflictEditor.vue";
 import WorkingDiff from "../components/WorkingDiff.vue";
 import {
@@ -29,6 +30,7 @@ import {
   fastForwardTag as fastForwardGitTag,
   fetchRemote as fetchGitRemote,
   getCommitDiff,
+  getRebasePlan,
   inspectUndo,
   mergeBranch as mergeGitBranches,
   mergeIntoTag as mergeIntoGitTag,
@@ -42,6 +44,7 @@ import {
   renameRemote as renameGitRemote,
   resetBranch as resetGitBranch,
   revertCommit as revertGitCommit,
+  runInteractiveRebase,
   setRemoteUrl as setGitRemoteUrl,
   undoLast as undoGitLast,
 } from "../lib/api";
@@ -118,6 +121,8 @@ import type {
   LaneParent,
   MenuItem,
   OperationKind,
+  RebasePlan,
+  RebaseStep,
   RefLabel,
   RemoteInfo,
   ResetMode,
@@ -179,6 +184,18 @@ const dialog = ref<{
   config: ActionDialogConfig;
   run: (values: DialogValues) => Promise<void>;
 } | null>(null);
+
+interface RebaseDialogState {
+  branch: string;
+  base: string;
+  baseLabel: string;
+}
+
+const rebaseDialog = ref<RebaseDialogState | null>(null);
+const rebasePlan = ref<RebasePlan | null>(null);
+const rebasePlanLoading = ref(false);
+const rebasePlanError = ref("");
+let rebasePlanRequest = 0;
 
 const DOSSIER_PREFS_KEY = "easygit.dossier";
 const DOSSIER_MIN_CHANGES = 283;
@@ -1693,7 +1710,7 @@ function openCommitMenu(x: number, y: number, row: CommitRow) {
   menu.value = {
     x,
     y,
-    items: commitMenuItems(),
+    items: commitMenuItems(row),
     context: { type: "commit", row },
   };
 }
@@ -1776,13 +1793,22 @@ function branchMenuItems(branch: BranchInfo): MenuItem[] {
       icon: "branch",
       disabled: !current || branch.isCurrent,
     },
+    {
+      id: "interactive-rebase",
+      label: "交互式变基…",
+      icon: "list",
+      hint: branch.upstream
+        ? `从 ${branch.upstream} 之后开始整理`
+        : "这个分支还没有上游分支",
+      disabled: !local || !branch.upstream,
+    },
     { separator: true },
     ...localActions,
     { id: "copy", label: "复制分支名", icon: "copy" },
   ];
 }
 
-function commitMenuItems(): MenuItem[] {
+function commitMenuItems(row: CommitRow): MenuItem[] {
   const current = currentBranch.value;
   return [
     { id: "view", label: "查看提交详情", icon: "commit" },
@@ -1806,6 +1832,13 @@ function commitMenuItems(): MenuItem[] {
       label: current ? `将 ${current.name} 变基到此…` : "将当前分支变基到此…",
       icon: "branch",
       disabled: !current,
+    },
+    {
+      id: "interactive-rebase",
+      label: "整理此后的提交…",
+      icon: "list",
+      hint: current ? `按新顺序重写 ${current.name} 的历史` : "先在本地分支上操作",
+      disabled: !current || row.oid === current.oid,
     },
     { separator: true },
     { id: "checkout", label: "签出此提交（分离 HEAD）", icon: "arrow-right" },
@@ -2078,6 +2111,11 @@ async function handleBranchAction(id: string, branch: BranchInfo) {
     case "rebase-current":
       if (current) openRebase(current.name, branch.name, branch.name);
       break;
+    case "interactive-rebase":
+      if (branch.upstream) {
+        void openInteractiveRebase(branch.name, branch.upstream, branch.upstream);
+      }
+      break;
     case "rename":
       openRenameBranch(branch);
       break;
@@ -2120,6 +2158,11 @@ async function handleCommitAction(id: string, row: CommitRow) {
     case "rebase":
       if (current) openRebase(current.name, `提交 ${row.shortId}`, row.oid);
       break;
+    case "interactive-rebase":
+      if (current) {
+        void openInteractiveRebase(current.name, row.oid, `提交 ${row.shortId}`);
+      }
+      break;
     case "checkout":
       openCheckoutCommit(row.oid, row.shortId);
       break;
@@ -2158,6 +2201,46 @@ function showDialog(
   run: (values: DialogValues) => Promise<void>,
 ) {
   dialog.value = { config, run };
+}
+
+async function loadRebasePlan() {
+  const current = rebaseDialog.value;
+  if (!current) return;
+  const request = ++rebasePlanRequest;
+  rebasePlan.value = null;
+  rebasePlanError.value = "";
+  rebasePlanLoading.value = true;
+  try {
+    const plan = await getRebasePlan(current.branch, current.base);
+    if (request === rebasePlanRequest) rebasePlan.value = plan;
+  } catch (e) {
+    if (request === rebasePlanRequest) rebasePlanError.value = errorText(e);
+  } finally {
+    if (request === rebasePlanRequest) rebasePlanLoading.value = false;
+  }
+}
+
+async function openInteractiveRebase(branch: string, base: string, baseLabel: string) {
+  rebaseDialog.value = { branch, base, baseLabel };
+  await loadRebasePlan();
+}
+
+function closeInteractiveRebase() {
+  rebaseDialog.value = null;
+  rebasePlan.value = null;
+  rebasePlanError.value = "";
+  rebasePlanLoading.value = false;
+  rebasePlanRequest += 1;
+}
+
+async function startInteractiveRebase(steps: RebaseStep[]) {
+  const current = rebaseDialog.value;
+  if (!current) return;
+  const { branch, base } = current;
+  closeInteractiveRebase();
+  await runOperation("正在交互式变基…", () =>
+    runInteractiveRebase(branch, base, steps),
+  );
 }
 
 async function onDialogSubmit(values: DialogValues) {
@@ -4107,6 +4190,17 @@ function onConflictMarkResolved() {
       :items="dropMenu.items"
       @close="dropMenu = null"
       @select="onDropMenuSelect"
+    />
+    <InteractiveRebaseDialog
+      v-if="rebaseDialog"
+      :branch="rebaseDialog.branch"
+      :base-label="rebaseDialog.baseLabel"
+      :plan="rebasePlan"
+      :loading="rebasePlanLoading"
+      :error="rebasePlanError"
+      @close="closeInteractiveRebase"
+      @retry="loadRebasePlan"
+      @submit="startInteractiveRebase"
     />
     <ActionDialog
       v-if="dialog"

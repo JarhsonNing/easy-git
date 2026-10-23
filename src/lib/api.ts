@@ -33,6 +33,8 @@ import type {
   OperationKind,
   OperationResult,
   RemoteInfo,
+  RebasePlan,
+  RebaseStep,
   RepoRefs,
   RepoRemoteInfo,
   RepoStatus,
@@ -148,6 +150,18 @@ export function mergeBranch(
 
 export function rebaseBranch(source: string, onto: string): Promise<OperationResult> {
   return invoke<OperationResult>("rebase_branch", { source, onto });
+}
+
+export function getRebasePlan(branch: string, base: string): Promise<RebasePlan> {
+  return invoke<RebasePlan>("interactive_rebase_plan", { branch, base });
+}
+
+export function runInteractiveRebase(
+  branch: string,
+  base: string,
+  steps: RebaseStep[],
+): Promise<OperationResult> {
+  return invoke<OperationResult>("interactive_rebase", { branch, base, steps });
 }
 
 export function cherryPick(oid: string, target: string | null): Promise<OperationResult> {

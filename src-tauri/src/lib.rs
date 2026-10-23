@@ -35,6 +35,8 @@ pub fn run() {
             commands::branch::delete_remote_branch,
             commands::branch::merge_branch,
             commands::branch::rebase_branch,
+            commands::branch::interactive_rebase_plan,
+            commands::branch::interactive_rebase,
             commands::branch::cherry_pick,
             commands::branch::cherry_pick_many,
             commands::branch::revert_commit,
