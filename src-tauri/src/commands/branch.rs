@@ -612,6 +612,47 @@ pub fn delete_branch(
     finish(&store, outcome, format!("已删除分支 {name}"), false)
 }
 
+fn split_remote_branch(store: &RepoStore, reference: &str) -> Result<(String, String), String> {
+    reject_dash(reference, "远程分支")?;
+    let refs = read_refs(store)?;
+    // 最长匹配，避免名为 git 的远程把 git/origin/x 之类的前缀切错
+    let remote = refs
+        .remotes
+        .iter()
+        .filter(|name| reference.starts_with(&format!("{name}/")))
+        .max_by_key(|name| name.len())
+        .ok_or_else(|| format!("「{reference}」不属于任何已配置的远程仓库"))?
+        .clone();
+    let branch = reference[remote.len() + 1..].to_string();
+    reject_dash(&branch, "远程分支名")?;
+    if branch.is_empty() {
+        return Err("远程分支名为空".to_string());
+    }
+    Ok((remote, branch))
+}
+
+#[tauri::command]
+pub fn delete_remote_branch(
+    store: State<'_, RepoStore>,
+    reference: String,
+) -> Result<OperationResult, String> {
+    let _guard = lock_ops(&store)?;
+    let dir = workdir(&store)?;
+    let (remote, branch) = split_remote_branch(&store, &reference)?;
+    let outcome = run_git(&dir, &["push", remote.as_str(), "--delete", branch.as_str()])?;
+    if outcome.ok {
+        // push --delete 只删远端引用，本地的 remote-tracking 引用要单独清掉，
+        // 否则分支栏会继续显示一条远端已经不存在的分支
+        let _ = run_git(&dir, &["branch", "-dr", reference.as_str()]);
+    }
+    finish(
+        &store,
+        outcome,
+        format!("已删除远端分支 {reference}"),
+        false,
+    )
+}
+
 #[tauri::command]
 pub fn merge_branch(
     store: State<'_, RepoStore>,
@@ -1037,6 +1078,67 @@ pub fn delete_tag(store: State<'_, RepoStore>, name: String) -> Result<Operation
     }
     let outcome = run_git(&dir, &["tag", "-d", name.as_str()])?;
     finish(&store, outcome, format!("已删除标签 {name}"), false)
+}
+
+#[tauri::command]
+pub fn push_tag(
+    store: State<'_, RepoStore>,
+    name: String,
+    remote: String,
+    force: bool,
+) -> Result<OperationResult, String> {
+    let _guard = lock_ops(&store)?;
+    let dir = workdir(&store)?;
+    validate_tag_name(&dir, &name)?;
+    ensure_remote(&store, &remote)?;
+    let reference = format!("refs/tags/{name}");
+    if !run_git(
+        &dir,
+        &["rev-parse", "--verify", "--quiet", reference.as_str()],
+    )?
+    .ok
+    {
+        return Err(format!("标签「{name}」不存在"));
+    }
+    let mut args = vec!["push"];
+    let suffix = if force {
+        args.push("--force");
+        "（--force）"
+    } else {
+        ""
+    };
+    args.push(remote.as_str());
+    args.push(reference.as_str());
+    let outcome = run_git(&dir, &args)?;
+    finish(
+        &store,
+        outcome,
+        format!("已将标签 {name} 推送到 {remote}{suffix}"),
+        false,
+    )
+}
+
+#[tauri::command]
+pub fn delete_remote_tag(
+    store: State<'_, RepoStore>,
+    name: String,
+    remote: String,
+) -> Result<OperationResult, String> {
+    let _guard = lock_ops(&store)?;
+    let dir = workdir(&store)?;
+    validate_tag_name(&dir, &name)?;
+    ensure_remote(&store, &remote)?;
+    let reference = format!("refs/tags/{name}");
+    let outcome = run_git(
+        &dir,
+        &["push", remote.as_str(), "--delete", reference.as_str()],
+    )?;
+    finish(
+        &store,
+        outcome,
+        format!("已删除 {remote} 上的标签 {name}"),
+        false,
+    )
 }
 
 #[tauri::command]

@@ -20,6 +20,8 @@ import {
   createBranch as createGitBranch,
   createTag as createGitTag,
   deleteBranch as deleteGitBranch,
+  deleteRemoteBranch as deleteGitRemoteBranch,
+  deleteRemoteTag as deleteGitRemoteTag,
   deleteTag as deleteGitTag,
   diffCommits as diffGitCommits,
   errorText,
@@ -31,6 +33,7 @@ import {
   pruneRemote as pruneGitRemote,
   pullBranch as pullGitBranch,
   pushBranch as pushGitBranch,
+  pushTag as pushGitTag,
   rebaseBranch as rebaseGitBranch,
   removeRemote as removeGitRemote,
   renameBranch as renameGitBranch,
@@ -1727,6 +1730,19 @@ function openCommitMenuFromButton(event: MouseEvent) {
 function branchMenuItems(branch: BranchInfo): MenuItem[] {
   const current = currentBranch.value;
   const local = branch.kind === "local";
+  const localActions: MenuItem[] = local
+    ? [
+        { id: "rename", label: "重命名分支…", icon: "pencil" },
+        {
+          id: "delete",
+          label: "删除分支…",
+          icon: "trash",
+          danger: true,
+          disabled: branch.isCurrent,
+        },
+        { id: "push", label: "推送分支…", icon: "upload" },
+      ]
+    : [{ id: "delete-remote", label: "删除远端分支…", icon: "trash", danger: true }];
   return [
     { id: "view", label: "查看分支详情", icon: "branch" },
     {
@@ -1751,15 +1767,7 @@ function branchMenuItems(branch: BranchInfo): MenuItem[] {
       disabled: !current || branch.isCurrent,
     },
     { separator: true },
-    { id: "rename", label: "重命名分支…", icon: "pencil", disabled: !local },
-    {
-      id: "delete",
-      label: "删除分支…",
-      icon: "trash",
-      danger: true,
-      disabled: !local || branch.isCurrent,
-    },
-    { id: "push", label: "推送分支…", icon: "upload", disabled: !local },
+    ...localActions,
     { id: "copy", label: "复制分支名", icon: "copy" },
   ];
 }
@@ -1801,6 +1809,13 @@ function tagMenuItems(): MenuItem[] {
     { id: "create-branch", label: "从此标签新建分支…", icon: "plus" },
     { id: "checkout", label: "签出标签（分离 HEAD）", icon: "arrow-right" },
     { separator: true },
+    { id: "push", label: "推送标签到远端…", icon: "upload" },
+    {
+      id: "delete-remote",
+      label: "删除远端标签…",
+      icon: "trash",
+      danger: true,
+    },
     { id: "delete", label: "删除标签…", icon: "trash", danger: true },
   ];
 }
@@ -2059,6 +2074,9 @@ async function handleBranchAction(id: string, branch: BranchInfo) {
     case "delete":
       openDeleteBranch(branch);
       break;
+    case "delete-remote":
+      openDeleteRemoteBranch(branch);
+      break;
     case "push":
       openPush(branch);
       break;
@@ -2115,6 +2133,12 @@ async function handleTagAction(id: string, tag: TagInfo) {
       break;
     case "delete":
       openDeleteTag(tag);
+      break;
+    case "push":
+      openPushTag(tag);
+      break;
+    case "delete-remote":
+      openDeleteRemoteTag(tag);
       break;
   }
 }
@@ -2504,6 +2528,126 @@ function openDeleteTag(tag: TagInfo) {
     },
     async () => {
       await runOperation("正在删除标签…", () => deleteGitTag(tag.name));
+    },
+  );
+}
+
+function remoteOfBranch(name: string): string {
+  const remotes = refs.value?.remotes ?? [];
+  const match = remotes
+    .filter((remote) => name.startsWith(`${remote}/`))
+    .sort((a, b) => b.length - a.length)[0];
+  return match ?? "";
+}
+
+function openDeleteRemoteBranch(branch: BranchInfo) {
+  const remote = remoteOfBranch(branch.name);
+  showDialog(
+    {
+      title: "删除远端分支",
+      description: `从远程仓库删除 ${branch.name}。`,
+      confirmLabel: "删除远端分支",
+      danger: true,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          text: remote
+            ? `这条命令会删除 ${remote} 上的分支 ${branch.name.slice(remote.length + 1)}；其他协作者下次抓取时它就会消失。本地分支不受影响。`
+            : "其他协作者下次抓取时这条分支就会消失。本地分支不受影响。",
+          danger: true,
+        },
+      ],
+    },
+    async () => {
+      await runOperation("正在删除远端分支…", () =>
+        deleteGitRemoteBranch(branch.name),
+      );
+    },
+  );
+}
+
+function tagRemoteFields(): { remotes: string[]; defaultRemote: string } {
+  const remotes = refs.value?.remotes ?? [];
+  const upstreamRemote = currentBranch.value?.upstream?.split("/")[0];
+  const defaultRemote =
+    (upstreamRemote && remotes.includes(upstreamRemote) ? upstreamRemote : remotes[0]) ?? "";
+  return { remotes, defaultRemote };
+}
+
+function openPushTag(tag: TagInfo) {
+  const { remotes, defaultRemote } = tagRemoteFields();
+  if (!remotes.length) {
+    setNotice({ tone: "error", message: "这个仓库还没有配置远程仓库，无法推送标签。" });
+    return;
+  }
+  showDialog(
+    {
+      title: "推送标签",
+      description: `将标签 ${tag.name} 推送到远程仓库。`,
+      confirmLabel: "推送标签",
+      fields: [
+        {
+          kind: "select",
+          key: "remote",
+          label: "远程",
+          options: remotes.map((remote) => ({ value: remote, label: remote })),
+          value: defaultRemote,
+        },
+        {
+          kind: "checkbox",
+          key: "force",
+          label: "覆盖远程已有的同名标签",
+          help: "只有标签需要改指向时才用；它会改写别人已经看到的标签。",
+          danger: true,
+        },
+        {
+          kind: "note",
+          key: "note",
+          text: "默认只推送这一个标签，不会顺带推送其他标签。",
+        },
+      ],
+    },
+    async (values) => {
+      await runOperation("正在推送标签…", () =>
+        pushGitTag(tag.name, textValue(values, "remote"), boolValue(values, "force")),
+      );
+    },
+  );
+}
+
+function openDeleteRemoteTag(tag: TagInfo) {
+  const { remotes, defaultRemote } = tagRemoteFields();
+  if (!remotes.length) {
+    setNotice({ tone: "error", message: "这个仓库还没有配置远程仓库，无法删除远端标签。" });
+    return;
+  }
+  showDialog(
+    {
+      title: "删除远端标签",
+      description: `删除远程仓库上的标签 ${tag.name}，本地标签会保留。`,
+      confirmLabel: "删除远端标签",
+      danger: true,
+      fields: [
+        {
+          kind: "select",
+          key: "remote",
+          label: "远程",
+          options: remotes.map((remote) => ({ value: remote, label: remote })),
+          value: defaultRemote,
+        },
+        {
+          kind: "note",
+          key: "note",
+          text: "删除后其他协作者不会再抓取这个标签；已经存在于他们本地的标签不会被撤回。",
+          danger: true,
+        },
+      ],
+    },
+    async (values) => {
+      await runOperation("正在删除远端标签…", () =>
+        deleteGitRemoteTag(tag.name, textValue(values, "remote")),
+      );
     },
   );
 }

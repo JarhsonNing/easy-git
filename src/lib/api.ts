@@ -183,6 +183,22 @@ export function deleteTag(name: string): Promise<OperationResult> {
   return invoke<OperationResult>("delete_tag", { name });
 }
 
+export function pushTag(
+  name: string,
+  remote: string,
+  force: boolean,
+): Promise<OperationResult> {
+  return invoke<OperationResult>("push_tag", { name, remote, force });
+}
+
+export function deleteRemoteTag(name: string, remote: string): Promise<OperationResult> {
+  return invoke<OperationResult>("delete_remote_tag", { name, remote });
+}
+
+export function deleteRemoteBranch(reference: string): Promise<OperationResult> {
+  return invoke<OperationResult>("delete_remote_branch", { reference });
+}
+
 export function fastForwardTag(name: string, target: string): Promise<OperationResult> {
   return invoke<OperationResult>("fast_forward_tag", { name, target });
 }
