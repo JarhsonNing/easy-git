@@ -28,6 +28,7 @@ import {
   fastForwardTag as fastForwardGitTag,
   fetchRemote as fetchGitRemote,
   getCommitDiff,
+  inspectUndo,
   mergeBranch as mergeGitBranches,
   mergeIntoTag as mergeIntoGitTag,
   pruneRemote as pruneGitRemote,
@@ -41,6 +42,7 @@ import {
   resetBranch as resetGitBranch,
   revertCommit as revertGitCommit,
   setRemoteUrl as setGitRemoteUrl,
+  undoLast as undoGitLast,
 } from "../lib/api";
 import {
   clearNotice,
@@ -70,6 +72,7 @@ import {
   session,
   setNotice,
   status,
+  undoInfo,
   wipSelected,
 } from "../stores/repo";
 import { navigate } from "../stores/ui";
@@ -2652,6 +2655,40 @@ function openDeleteRemoteTag(tag: TagInfo) {
   );
 }
 
+async function openUndo() {
+  let info = undoInfo.value;
+  try {
+    info = await inspectUndo();
+    undoInfo.value = info;
+  } catch (e) {
+    setNotice({ tone: "error", message: errorText(e) });
+    return;
+  }
+  if (!info) {
+    setNotice({ tone: "error", message: "没有可以撤销的操作。" });
+    return;
+  }
+  showDialog(
+    {
+      title: "撤销上一步",
+      description: `撤销${info.summary}。`,
+      confirmLabel: "撤销",
+      danger: info.destructive,
+      fields: [
+        {
+          kind: "note",
+          key: "note",
+          text: info.detail,
+          danger: info.destructive,
+        },
+      ],
+    },
+    async () => {
+      await runOperation("正在撤销…", () => undoGitLast(), refreshAll);
+    },
+  );
+}
+
 function openPush(branch: BranchInfo) {
   const remotes = refs.value?.remotes ?? [];
   if (!remotes.length) {
@@ -3102,6 +3139,16 @@ function onWorkingToggleSelected() {
               推送
             </button>
           </div>
+          <button
+            type="button"
+            class="button ghost small"
+            :disabled="!!operation || loading || !undoInfo"
+            :title="undoInfo ? `撤销${undoInfo.summary}` : '没有可以撤销的操作'"
+            @click="openUndo"
+          >
+            <Icon name="undo" :size="15" />
+            撤销
+          </button>
           <button type="button" class="button ghost small rail-toggle" @click="railOpen = true">
             <Icon name="branch" :size="15" />
             分支

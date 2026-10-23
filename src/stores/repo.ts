@@ -5,6 +5,7 @@ import {
   getRepoRefs,
   getRepoStatus,
   getSettings,
+  inspectUndo,
   listRemotes,
   loadGraph,
   openRepository,
@@ -19,6 +20,7 @@ import type {
   RepoRefs,
   RepoStatus,
   RepoSummary,
+  UndoInfo,
 } from "../types";
 
 export const session = ref<RepoSummary | null>(null);
@@ -36,6 +38,7 @@ export const detailLoading = ref(false);
 export const refs = ref<RepoRefs | null>(null);
 export const remotes = ref<RemoteInfo[]>([]);
 export const status = ref<RepoStatus | null>(null);
+export const undoInfo = ref<UndoInfo | null>(null);
 export const operation = ref<string | null>(null);
 export const notice = ref<Notice | null>(null);
 
@@ -57,17 +60,19 @@ async function readPageSize() {
 }
 
 async function loadInitialSnapshot(): Promise<RepoRefs | null> {
-  const [page, refsResult, statusResult, remoteList] = await Promise.all([
+  const [page, refsResult, statusResult, remoteList, undoResult] = await Promise.all([
     loadGraph(0, pageSize),
     getRepoRefs(),
     getRepoStatus(),
     listRemotes(),
+    inspectUndo().catch(() => null),
   ]);
   rows.value = page.rows;
   hasMore.value = page.hasMore;
   refs.value = refsResult;
   remotes.value = remoteList;
   status.value = statusResult;
+  undoInfo.value = undoResult;
   if (session.value && statusResult.branch) {
     session.value.headBranch = statusResult.branch;
   }
@@ -110,6 +115,7 @@ export async function openRepo(path: string): Promise<boolean> {
   refs.value = null;
   remotes.value = [];
   status.value = null;
+  undoInfo.value = null;
   clearNotice();
   try {
     await readPageSize();
@@ -149,6 +155,7 @@ export function closeRepo() {
   refs.value = null;
   remotes.value = [];
   status.value = null;
+  undoInfo.value = null;
   operation.value = null;
   loading.value = false;
   loadingMore.value = false;

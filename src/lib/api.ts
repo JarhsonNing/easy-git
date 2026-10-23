@@ -38,6 +38,7 @@ import type {
   RepoSummary,
   ResetMode,
   StashEntry,
+  UndoInfo,
   WorkingDiff,
   WorkingFiles,
   WorkingStage,
@@ -197,6 +198,14 @@ export function deleteRemoteTag(name: string, remote: string): Promise<Operation
 
 export function deleteRemoteBranch(reference: string): Promise<OperationResult> {
   return invoke<OperationResult>("delete_remote_branch", { reference });
+}
+
+export function inspectUndo(): Promise<UndoInfo | null> {
+  return invoke<UndoInfo | null>("inspect_undo");
+}
+
+export function undoLast(): Promise<OperationResult> {
+  return invoke<OperationResult>("undo_last");
 }
 
 export function fastForwardTag(name: string, target: string): Promise<OperationResult> {

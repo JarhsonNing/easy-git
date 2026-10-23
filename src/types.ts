@@ -349,6 +349,12 @@ export interface OperationResult {
   state: string;
 }
 
+export interface UndoInfo {
+  summary: string;
+  detail: string;
+  destructive: boolean;
+}
+
 export type ResetMode = "soft" | "mixed" | "hard";
 export type OperationKind = "merge" | "rebase" | "cherry-pick" | "revert";
 

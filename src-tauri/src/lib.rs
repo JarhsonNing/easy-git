@@ -50,6 +50,8 @@ pub fn run() {
             commands::branch::push_branch,
             commands::branch::continue_operation,
             commands::branch::abort_operation,
+            commands::undo::inspect_undo,
+            commands::undo::undo_last,
             commands::remote::list_remotes,
             commands::remote::add_remote,
             commands::remote::remove_remote,
