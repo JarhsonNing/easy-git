@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Easy Git — one river reaches the sea and fans into channels: the delta as a commit graph</title>
+  <rect width="1024" height="1024" rx="192" fill="#20241F" />
+  <g fill="none" stroke-linecap="round">
+    <path d="M112 706C214 646 318 590 392 548" stroke="#F5EFE3" stroke-width="98" />
+    <path d="M392 548C470 448 596 300 776 196" stroke="#D98F6C" stroke-width="76" />
+    <path d="M392 548C540 512 706 494 892 500" stroke="#9FC4B8" stroke-width="70" />
+    <path d="M392 548C500 654 620 762 786 846" stroke="#E0B25F" stroke-width="74" />
+  </g>
+  <circle cx="392" cy="548" r="64" fill="#F5EFE3" />
+  <g fill="#F5EFE3">
+    <circle cx="776" cy="196" r="34" />
+    <circle cx="892" cy="500" r="34" />
+    <circle cx="786" cy="846" r="34" />
+  </g>
+</svg>

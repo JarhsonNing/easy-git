@@ -150,6 +150,13 @@ The type pairing does the quiet work: Bricolage Grotesque gives Latin display, p
 - One 1180px column for index surfaces; work area plus one fixed rail or list pane inside a project, where the commit view's rail carries repository refs and the inspector follows the selection.
 - Chinese-first copy with a Chinese-aware font stack, never Latin tracking on CJK.
 
+### Mark & icon
+
+The identity mark is the delta itself, drawn rather than typeset: one Survey Paper trunk enters from the lower left, meets a split node, and fans into three channels — terracotta upslope, sage straight out, ochre toward the sea. It is the commit graph reduced to its one gesture, and it uses the same channel colors the graph lanes use. `brand/easy-git-icon.svg` is the single source of truth; `npx tauri icon brand/easy-git-icon.svg -o src-tauri/icons` regenerates every desktop asset from it.
+
+- **App icon:** a 1024² Atlas Ink plate at a 192px corner radius. Trunk at 98, channels at 76 / 70 / 74 with round caps, a split node at r=64 and three mouth dots at r=34 in Survey Paper. Weights are chosen so the fan still separates at 32px.
+- **App bar mark:** the same geometry at 28×24, inline in `src/App.vue` and plateless because the bar is already ink. Channels even out to a single 2.2px stroke, the trunk holds at 2.6, and the mouth dots drop — at that size they read as breaks in the line rather than as nodes.
+
 ## Colors
 
 A warm paper-and-ink atlas palette, with one cool working accent and four meaning-bound signal colors.

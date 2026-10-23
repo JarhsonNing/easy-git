@@ -51,10 +51,11 @@ const locationLabel = computed(() => {
         <button type="button" class="brand" title="返回项目列表" @click="navigate('projects')">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 28 24" fill="none">
-              <path d="M1 15C7 15 9 14 13 10C16 7 20 5 27 4" stroke="#F5EFE3" stroke-width="2" stroke-linecap="round" />
-              <path d="M1 12C8 12 11 10 15 7C19 4 22 3 27 8" stroke="#D98F6C" stroke-width="1.6" stroke-linecap="round" opacity=".9" />
-              <path d="M1 18C8 18 11 17 16 15C20 13 23 13 27 14" stroke="#9FC4B8" stroke-width="1.6" stroke-linecap="round" opacity=".9" />
-              <circle cx="27" cy="4" r="2.2" fill="#F5EFE3" />
+              <path d="M11 12.8C13.3 9.8 17 5.5 22.3 2.6" stroke="#D98F6C" stroke-width="2.2" stroke-linecap="round" />
+              <path d="M11 12.8C15.4 11.7 20.2 11.2 25.6 11.3" stroke="#9FC4B8" stroke-width="2.2" stroke-linecap="round" />
+              <path d="M11 12.8C14.2 15.9 17.7 19.1 22.6 21.5" stroke="#E0B25F" stroke-width="2.2" stroke-linecap="round" />
+              <path d="M2.8 17.4C5.8 13.9 8.9 12.8 11 12.8" stroke="#F5EFE3" stroke-width="2.6" stroke-linecap="round" />
+              <circle cx="11" cy="12.8" r="1.35" fill="#F5EFE3" />
             </svg>
           </span>
           <span class="brand-name">easy git</span>
