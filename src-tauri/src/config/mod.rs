@@ -20,8 +20,7 @@ fn config_path() -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
-#[tauri::command]
-pub fn get_settings() -> Result<AppConfig, String> {
+pub fn load_config() -> Result<AppConfig, String> {
     let path = config_path()?;
     if !path.exists() {
         return Ok(AppConfig::default());
@@ -30,11 +29,20 @@ pub fn get_settings() -> Result<AppConfig, String> {
     serde_json::from_str(&raw).map_err(|e| format!("解析配置失败: {e}"))
 }
 
-#[tauri::command]
-pub fn save_settings(config: AppConfig) -> Result<(), String> {
+pub fn save_config(config: &AppConfig) -> Result<(), String> {
     let path = config_path()?;
     let tmp = path.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&config).map_err(|e| format!("序列化配置失败: {e}"))?;
+    let json = serde_json::to_string_pretty(config).map_err(|e| format!("序列化配置失败: {e}"))?;
     fs::write(&tmp, json).map_err(|e| format!("写入配置失败: {e}"))?;
     fs::rename(&tmp, &path).map_err(|e| format!("保存配置失败: {e}"))
+}
+
+#[tauri::command]
+pub fn get_settings() -> Result<AppConfig, String> {
+    load_config()
+}
+
+#[tauri::command]
+pub fn save_settings(config: AppConfig) -> Result<(), String> {
+    save_config(&config)
 }

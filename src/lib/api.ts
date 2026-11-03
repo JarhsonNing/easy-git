@@ -40,6 +40,9 @@ import type {
   RepoStatus,
   RepoSummary,
   ResetMode,
+  SshHostKey,
+  SshKeyInfo,
+  SshTestResult,
   StashEntry,
   UndoInfo,
   WorkingDiff,
@@ -82,6 +85,48 @@ export function testAi(
   account: string | null,
 ): Promise<AiModels> {
   return invoke<AiModels>("test_ai", { baseUrl, apiKey, account });
+}
+
+export function listSshKeys(): Promise<SshKeyInfo[]> {
+  return invoke<SshKeyInfo[]>("list_ssh_keys");
+}
+
+export function generateSshKey(
+  name: string,
+  keyType: string,
+  comment: string,
+  passphrase: string | null,
+): Promise<SshKeyInfo> {
+  return invoke<SshKeyInfo>("generate_ssh_key", { name, keyType, comment, passphrase });
+}
+
+export function setSshPassphrase(name: string, passphrase: string): Promise<void> {
+  return invoke<void>("set_ssh_passphrase", { name, passphrase });
+}
+
+export function clearSshPassphrase(name: string): Promise<void> {
+  return invoke<void>("clear_ssh_passphrase", { name });
+}
+
+export function deleteSshKey(name: string): Promise<void> {
+  return invoke<void>("delete_ssh_key", { name });
+}
+
+export function trustSshHost(
+  host: string,
+  port: number,
+  keyType: string,
+): Promise<SshHostKey> {
+  return invoke<SshHostKey>("trust_ssh_host", { host, port, keyType });
+}
+
+export function testSshConnection(
+  host: string,
+  port: number,
+  user: string,
+  keyName: string | null,
+): Promise<SshTestResult> {
+  return invoke<SshTestResult>("test_ssh_connection", { host, port, user, keyName });
 }
 
 export function openRepository(path: string): Promise<RepoSummary> {

@@ -94,6 +94,7 @@ impl Default for AiProfile {
 pub struct GitConfig {
     pub page_size: u32,
     pub max_lanes: u32,
+    pub ssh_key_name: Option<String>,
 }
 
 impl Default for GitConfig {
@@ -101,6 +102,7 @@ impl Default for GitConfig {
         Self {
             page_size: 500,
             max_lanes: 32,
+            ssh_key_name: None,
         }
     }
 }

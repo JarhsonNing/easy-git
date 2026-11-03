@@ -115,6 +115,7 @@ fn base_command(dir: &Path, args: &[&str]) -> Command {
         .env("GIT_MERGE_AUTOEDIT", "no")
         .env("GIT_PAGER", "cat")
         .env("GCM_INTERACTIVE", "Never");
+    super::ssh::apply_git_ssh(&mut command);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
     command

@@ -6,5 +6,6 @@ pub mod gitlab_projects;
 pub mod remote;
 pub mod repo;
 pub mod settings;
+pub mod ssh;
 pub mod undo;
 pub mod workspace;

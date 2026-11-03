@@ -30,6 +30,7 @@ export interface AppConfig {
   git: {
     pageSize: number;
     maxLanes: number;
+    sshKeyName: string | null;
   };
 }
 
@@ -601,4 +602,37 @@ export interface CommitOutcome {
   output: string;
   oid: string | null;
   amended: boolean;
+}
+
+export interface SshKeyInfo {
+  name: string;
+  path: string;
+  publicPath: string;
+  keyType: string;
+  bits: number;
+  fingerprint: string;
+  comment: string;
+  publicKey: string;
+  encrypted: boolean;
+  hasPassphrase: boolean;
+  modifiedAt: number;
+}
+
+export interface SshHostKey {
+  keyType: string;
+  fingerprint: string;
+}
+
+export type SshTestStatus =
+  | "ok"
+  | "unknownHost"
+  | "hostKeyChanged"
+  | "authFailed"
+  | "unreachable"
+  | "error";
+
+export interface SshTestResult {
+  status: SshTestStatus;
+  message: string;
+  hostKeys: SshHostKey[];
 }
