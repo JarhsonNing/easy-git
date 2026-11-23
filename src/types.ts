@@ -34,6 +34,11 @@ export interface AppConfig {
   };
 }
 
+export interface GitIdentity {
+  name: string | null;
+  email: string | null;
+}
+
 export interface GitLabUser {
   id: number;
   username: string;

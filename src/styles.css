@@ -6529,6 +6529,24 @@ button.ref:hover {
   margin-top: 1px;
 }
 
+.composer-warn-link {
+  flex: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.composer-warn-link:hover {
+  color: var(--coral);
+}
+
 .composer-identity {
   overflow: hidden;
   color: var(--muted);

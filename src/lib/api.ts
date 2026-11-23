@@ -13,6 +13,7 @@ import type {
   CommitPatch,
   ConflictFile,
   FileDiff,
+  GitIdentity,
   GitLabBranch,
   GitLabFileContent,
   GitLabJob,
@@ -57,6 +58,14 @@ export function getSettings(): Promise<AppConfig> {
 
 export function saveSettings(config: AppConfig): Promise<void> {
   return invoke<void>("save_settings", { config });
+}
+
+export function getGitIdentity(): Promise<GitIdentity> {
+  return invoke<GitIdentity>("get_git_identity");
+}
+
+export function saveGitIdentity(name: string, email: string): Promise<GitIdentity> {
+  return invoke<GitIdentity>("save_git_identity", { name, email });
 }
 
 export function setSecret(account: string, value: string): Promise<void> {

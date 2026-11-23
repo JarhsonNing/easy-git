@@ -3,6 +3,7 @@ pub mod branch;
 pub mod conflict;
 pub mod gitlab;
 pub mod gitlab_projects;
+pub mod identity;
 pub mod remote;
 pub mod repo;
 pub mod settings;

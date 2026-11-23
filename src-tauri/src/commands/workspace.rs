@@ -1196,7 +1196,9 @@ pub fn commit_changes(
 
     let dir = workdir(&store)?;
     if !run_git(&dir, &["var", "GIT_AUTHOR_IDENT"])?.ok {
-        return Err("未配置 Git 用户身份，请先设置 user.name 与 user.email 后再提交".to_string());
+        return Err(
+            "未配置 Git 提交身份，请在 设置 → 提交身份 中填写用户名与邮箱后再提交".to_string(),
+        );
     }
 
     let mut args: Vec<String> = vec!["commit".to_string(), "-m".to_string(), trimmed.to_string()];

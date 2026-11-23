@@ -8,9 +8,11 @@ import {
   deleteSshKey,
   errorText,
   generateSshKey,
+  getGitIdentity,
   getSettings,
   hasSecret,
   listSshKeys,
+  saveGitIdentity,
   saveSettings,
   setSecret,
   setSshPassphrase,
@@ -22,6 +24,7 @@ import {
 import type {
   AiProfile,
   AppConfig,
+  GitIdentity,
   GitLabInstance,
   SshKeyInfo,
   SshTestResult,
@@ -75,6 +78,54 @@ const sshTest = reactive({
   trustError: "",
 });
 
+const gitIdentity = ref<GitIdentity>({ name: null, email: null });
+const identityForm = reactive({ name: "", email: "" });
+const identityBusy = ref(false);
+const identityNotice = ref<Notice | null>(null);
+
+const identityConfigured = computed(
+  () => Boolean(gitIdentity.value.name && gitIdentity.value.email),
+);
+const identityMissing = computed(() => {
+  const name = identityForm.name.trim();
+  const email = identityForm.email.trim();
+  if (!name && !email) return "还没有配置提交身份，提交会被 Git 拒绝。";
+  if (!name) return "还缺用户名：Git 需要用户名和邮箱同时存在。";
+  if (!email) return "还缺邮箱：Git 需要用户名和邮箱同时存在。";
+  return "";
+});
+
+async function loadGitIdentity() {
+  try {
+    const loaded = await getGitIdentity();
+    gitIdentity.value = loaded;
+    identityForm.name = loaded.name ?? "";
+    identityForm.email = loaded.email ?? "";
+  } catch (error) {
+    identityNotice.value = { kind: "error", text: errorText(error) };
+  }
+}
+
+async function saveIdentity() {
+  if (identityBusy.value) return;
+  identityNotice.value = null;
+  identityBusy.value = true;
+  try {
+    const saved = await saveGitIdentity(identityForm.name, identityForm.email);
+    gitIdentity.value = saved;
+    identityForm.name = saved.name ?? "";
+    identityForm.email = saved.email ?? "";
+    identityNotice.value = {
+      kind: "ok",
+      text: "已写入全局 Git 配置，本机所有仓库都会使用这个提交身份。",
+    };
+  } catch (error) {
+    identityNotice.value = { kind: "error", text: errorText(error) };
+  } finally {
+    identityBusy.value = false;
+  }
+}
+
 const selectedSshKey = computed(() => {
   const name = config.value?.git.sshKeyName;
   if (!name) return null;
@@ -125,6 +176,7 @@ function scrollToSection(id: string) {
 
 onMounted(async () => {
   void loadSshKeys();
+  void loadGitIdentity();
   try {
     const loaded = await getSettings();
     config.value = loaded;
@@ -624,7 +676,7 @@ async function persist() {
     <header class="page-head">
       <div class="page-heading">
         <h1>设置</h1>
-        <p>连接 GitLab、配置本地模型，以及调整图谱读取偏好。</p>
+        <p>设置提交身份、连接 GitLab、配置本地模型，以及调整图谱读取偏好。</p>
       </div>
       <span class="keychain-note">
         <Icon name="lock" :size="14" />
@@ -635,6 +687,10 @@ async function persist() {
     <div class="settings-layout">
       <aside class="settings-index" aria-label="设置分区">
         <span class="section-label">设置项</span>
+        <button type="button" class="index-link" @click="scrollToSection('identity-settings')">
+          <Icon name="user" :size="15" />
+          提交身份
+        </button>
         <button type="button" class="index-link" @click="scrollToSection('gitlab-settings')">
           <Icon name="folder" :size="15" />
           GitLab 实例
@@ -658,6 +714,65 @@ async function persist() {
       </aside>
 
       <div class="settings-content">
+        <section id="identity-settings" class="settings-section">
+          <div class="settings-section-head">
+            <div>
+              <h2>提交身份</h2>
+              <p>Git 用这里的用户名和邮箱标记每一次提交。未配置时提交会被 Git 拒绝。</p>
+            </div>
+            <span v-if="identityConfigured" class="tag success">
+              <span class="status-dot"></span>
+              已配置
+            </span>
+            <span v-else class="tag muted">未配置</span>
+          </div>
+
+          <article class="settings-item">
+            <div class="form-grid two">
+              <label class="field">
+                <span>用户名</span>
+                <input
+                  v-model="identityForm.name"
+                  placeholder="Ada Lovelace"
+                  autocomplete="name"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="field">
+                <span>邮箱</span>
+                <input
+                  v-model="identityForm.email"
+                  type="email"
+                  placeholder="ada@example.com"
+                  autocomplete="email"
+                  spellcheck="false"
+                  @keydown.enter.prevent="saveIdentity"
+                />
+              </label>
+            </div>
+
+            <p v-if="identityMissing" class="alert info">{{ identityMissing }}</p>
+
+            <footer class="settings-item-foot">
+              <button
+                type="button"
+                class="button primary small"
+                :disabled="identityBusy"
+                @click="saveIdentity"
+              >
+                {{ identityBusy ? "保存中…" : "保存身份" }}
+              </button>
+              <span>
+                写入全局 Git 配置（~/.gitconfig），对本机所有仓库生效；仓库内单独设置的身份优先。
+              </span>
+            </footer>
+
+            <p v-if="identityNotice" class="alert" :class="identityNotice.kind">
+              {{ identityNotice.text }}
+            </p>
+          </article>
+        </section>
+
         <section id="gitlab-settings" class="settings-section">
           <div class="settings-section-head">
             <div>

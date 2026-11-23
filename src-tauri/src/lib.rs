@@ -83,6 +83,8 @@ pub fn run() {
             commands::workspace::discard_files,
             commands::workspace::commit_identity,
             commands::workspace::commit_changes,
+            commands::identity::get_git_identity,
+            commands::identity::save_git_identity,
             commands::workspace::list_stashes,
             commands::workspace::stash_push,
             commands::workspace::stash_apply,

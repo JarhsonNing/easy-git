@@ -17,6 +17,7 @@ import {
   writeDraft,
 } from "../stores/workspace";
 import { rows } from "../stores/repo";
+import { navigate } from "../stores/ui";
 import type { MenuItem } from "../types";
 
 const props = defineProps<{
@@ -208,7 +209,10 @@ onBeforeUnmount(() => {
 
       <p v-if="!identity" class="composer-warn">
         <Icon name="alert" :size="13" />
-        还没有配置 Git 用户身份，提交会失败。请先设置 user.name 与 user.email。
+        <span>还没有配置提交身份，提交会失败。</span>
+        <button type="button" class="composer-warn-link" @click="navigate('settings')">
+          前往设置
+        </button>
       </p>
       <p v-else class="composer-identity">提交者：{{ identity }}</p>
     </div>
