@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:app": "node scripts/build-app.mjs",
+    "build:app:exe": "node scripts/build-app.mjs --no-bundle",
     "preview": "vite preview",
     "tauri": "tauri"
   },
