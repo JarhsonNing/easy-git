@@ -689,3 +689,7 @@ export function cloneGitLabProject(
     parentDir,
   });
 }
+
+export function cloneRepository(url: string, parentDir: string): Promise<CloneResult> {
+  return invoke<CloneResult>("clone_repository", { url, parentDir });
+}

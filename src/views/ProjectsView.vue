@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Icon from "../components/Icon.vue";
 import DeltaMark from "../components/DeltaMark.vue";
@@ -7,6 +7,7 @@ import { errorText, pickRepository } from "../lib/api";
 import {
   addProject,
   cloneToProjectList,
+  cloneUrlToProjectList,
   gitlabActiveId,
   gitlabCloning,
   gitlabError,
@@ -27,6 +28,7 @@ import {
   removeProject,
   sameProjectPath,
   selectGitlabInstance,
+  urlCloning,
 } from "../stores/projects";
 import { error as repoError, loading as repoLoading, openRepo, session } from "../stores/repo";
 import { navigate } from "../stores/ui";
@@ -44,6 +46,10 @@ const actionError = ref("");
 const notice = ref("");
 const query = ref("");
 const gitlabQuery = ref("");
+const cloneOpen = ref(false);
+const cloneUrl = ref("");
+const cloneUrlError = ref("");
+const cloneUrlInput = ref<HTMLInputElement | null>(null);
 
 let searchTimer = 0;
 
@@ -148,6 +154,8 @@ async function setSource(next: Source): Promise<void> {
   actionError.value = "";
   notice.value = "";
   removePath.value = "";
+  cloneOpen.value = false;
+  cloneUrlError.value = "";
   closeMenu();
   if (next !== "gitlab") return;
   if (!gitlabInstances.value.length) await loadProjects();
@@ -214,6 +222,58 @@ async function addFromPicker() {
     actionError.value = errorText(error);
   } finally {
     picking.value = false;
+  }
+}
+
+async function toggleCloneUrl() {
+  if (urlCloning.value) return;
+  if (cloneOpen.value) {
+    closeCloneUrl();
+    return;
+  }
+  actionError.value = "";
+  notice.value = "";
+  removePath.value = "";
+  closeMenu();
+  cloneOpen.value = true;
+  cloneUrlError.value = "";
+  await nextTick();
+  cloneUrlInput.value?.focus();
+}
+
+function closeCloneUrl() {
+  if (urlCloning.value) return;
+  cloneOpen.value = false;
+  cloneUrlError.value = "";
+}
+
+async function startCloneFromUrl() {
+  if (urlCloning.value || repoLoading.value) return;
+  const url = cloneUrl.value.trim();
+  if (!url) {
+    cloneUrlError.value = "请先填写仓库地址。";
+    cloneUrlInput.value?.focus();
+    return;
+  }
+  cloneUrlError.value = "";
+  actionError.value = "";
+  notice.value = "";
+
+  const parent = await openDialog({
+    directory: true,
+    multiple: false,
+    title: "选择克隆存放目录",
+  });
+  if (typeof parent !== "string" || !parent) return;
+
+  try {
+    const result = await cloneUrlToProjectList(url, parent);
+    cloneOpen.value = false;
+    cloneUrl.value = "";
+    notice.value = `已克隆「${result.name}」并加入项目列表。`;
+    if (await openLocal(result.path)) navigate("graph");
+  } catch (error) {
+    cloneUrlError.value = errorText(error);
   }
 }
 
@@ -316,7 +376,7 @@ async function confirmRemove(project: ProjectEntry) {
         <button
           type="button"
           class="button ghost"
-          :disabled="refreshing || picking"
+          :disabled="refreshing || picking || urlCloning"
           @click="refresh"
         >
           <Icon name="refresh" :size="16" />
@@ -325,8 +385,19 @@ async function confirmRemove(project: ProjectEntry) {
         <button
           v-if="source === 'local'"
           type="button"
+          class="button ghost"
+          :disabled="picking || repoLoading || urlCloning"
+          :aria-expanded="cloneOpen"
+          @click="toggleCloneUrl"
+        >
+          <Icon name="download" :size="16" />
+          从 URL 克隆
+        </button>
+        <button
+          v-if="source === 'local'"
+          type="button"
           class="button primary"
-          :disabled="picking || repoLoading"
+          :disabled="picking || repoLoading || urlCloning"
           @click="addFromPicker"
         >
           <Icon name="plus" :size="17" />
@@ -334,6 +405,54 @@ async function confirmRemove(project: ProjectEntry) {
         </button>
       </div>
     </header>
+
+    <section
+      v-if="source === 'local' && cloneOpen"
+      class="clone-url-dock"
+      aria-label="从 URL 克隆仓库"
+    >
+      <div class="clone-url-main">
+        <strong>从 URL 克隆</strong>
+        <span>
+          支持 https://、ssh://、git:// 和 git@host:path。公开仓库可直接克隆；私有仓库请走
+          GitLab 面板，令牌只写入钥匙串。
+        </span>
+      </div>
+      <div class="clone-url-controls">
+        <input
+          ref="cloneUrlInput"
+          v-model="cloneUrl"
+          class="input"
+          type="text"
+          placeholder="https://github.com/owner/repo.git"
+          spellcheck="false"
+          autocomplete="off"
+          aria-label="仓库地址"
+          :disabled="urlCloning"
+          @keydown.enter.prevent="startCloneFromUrl"
+          @keydown.esc="closeCloneUrl"
+        />
+        <button
+          type="button"
+          class="button primary"
+          :disabled="urlCloning || !cloneUrl.trim()"
+          @click="startCloneFromUrl"
+        >
+          <span v-if="urlCloning" class="loading-orbit" aria-hidden="true"></span>
+          <Icon v-else name="download" :size="16" />
+          {{ urlCloning ? "克隆中…" : "选择目录并克隆" }}
+        </button>
+        <button
+          type="button"
+          class="button ghost"
+          :disabled="urlCloning"
+          @click="closeCloneUrl"
+        >
+          取消
+        </button>
+      </div>
+      <p v-if="cloneUrlError" class="alert error" role="alert">{{ cloneUrlError }}</p>
+    </section>
 
     <p v-if="notice" class="alert success" role="status">{{ notice }}</p>
     <p v-if="actionError || projectsError" class="alert error" role="alert">

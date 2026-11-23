@@ -112,6 +112,7 @@ pub fn run() {
             commands::gitlab_projects::get_job_trace,
             commands::gitlab_projects::sync_gitlab_fork,
             commands::gitlab_projects::clone_gitlab_project,
+            commands::clone::clone_repository,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

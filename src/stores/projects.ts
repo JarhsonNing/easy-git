@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import {
   cloneGitLabProject,
+  cloneRepository,
   errorText,
   getSettings,
   inspectRepository,
@@ -31,6 +32,7 @@ export const gitlabHasMore = ref(false);
 export const gitlabPage = ref(1);
 export const gitlabError = ref("");
 export const gitlabCloning = ref("");
+export const urlCloning = ref(false);
 export const localMatches = ref<Record<string, LocalProjectMatch>>({});
 
 let listToken = 0;
@@ -176,5 +178,24 @@ export async function cloneToProjectList(
     return result;
   } finally {
     gitlabCloning.value = "";
+  }
+}
+
+export async function cloneUrlToProjectList(
+  url: string,
+  parentDir: string,
+): Promise<CloneResult> {
+  if (urlCloning.value) throw new Error("上一个克隆还没结束，请稍候。");
+  urlCloning.value = true;
+  try {
+    const result = await cloneRepository(url, parentDir);
+    try {
+      await addProject(result.path);
+    } catch (error) {
+      throw new Error(`已克隆到 ${result.path}，但加入项目列表失败：${errorText(error)}`);
+    }
+    return result;
+  } finally {
+    urlCloning.value = false;
   }
 }

@@ -1062,6 +1062,51 @@ input[type="number"] {
   white-space: nowrap;
 }
 
+.clone-url-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: -4px 0 20px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(235, 225, 206, 0.32);
+}
+
+.clone-url-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.clone-url-main strong {
+  font-size: 13px;
+}
+
+.clone-url-main span {
+  max-width: 76ch;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.clone-url-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.clone-url-controls .input {
+  flex: 1 1 300px;
+  min-width: 0;
+  max-width: 560px;
+}
+
+.clone-url-dock .alert {
+  margin: 0;
+}
+
 .search-field {
   display: flex;
   align-items: center;
